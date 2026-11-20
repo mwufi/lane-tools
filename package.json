@@ -6,7 +6,6 @@
   "type": "module",
   "bin": { "lane": "cli/lane.mjs" },
   "scripts": {
-    "typecheck": "tsc --noEmit -p convex",
     "deploy:control-plane": "convex deploy"
   },
   "engines": { "node": ">=20" },
