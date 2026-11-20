@@ -1,4 +1,4 @@
-# lane
+# lane-tools
 
 One shared cloud backend per branch, for every agent on it. Claude, Codex, Cursor, Amp or a
 person at a laptop all run the same CLI. v0 of the design in "Convex preview control plane".

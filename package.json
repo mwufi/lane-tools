@@ -1,5 +1,5 @@
 {
-  "name": "lane",
+  "name": "lane-tools",
   "version": "0.1.0",
   "private": true,
   "description": "Per-branch lanes: one shared cloud backend per branch, for every agent on it.",

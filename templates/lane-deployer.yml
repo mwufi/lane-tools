@@ -15,7 +15,9 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: node tools/lane/cli/lane.mjs deploy
+      - uses: actions/checkout@v4
+        with: { repository: mwufi/lane-tools, path: .lane-tools, token: "${{ secrets.LANE_TOOLS_READ_TOKEN }}" }
+      - run: node .lane-tools/cli/lane.mjs deploy
         env:
           LANE_URL: ${{ vars.LANE_URL }}
           LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}
