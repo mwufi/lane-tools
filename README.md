@@ -4,13 +4,26 @@ One shared cloud backend per branch, for every agent on it. Claude, Codex, Curso
 person at a laptop all run the same CLI. v0 of the design in "Convex preview control plane".
 
 ```
+npm install -g github:mwufi/lane-tools
+lane init --url https://<lane-control>.convex.site --token-stdin < my-token   # once per machine
+lane doctor                              # checks node, URL, token, network, repo registered
+
 lane join --task "Add emoji reactions"   # create or reuse this branch's lane, register on its page
+lane push                                # git push + redeploy if convex/ changed + wait until live
 lane status                              # URLs, deployed vs HEAD, other agents, recent activity
 git push                                 # the lane follows the branch: convex/ changed -> redeploy
 lane wait --sha HEAD                     # block until your commit is live
 lane key                                 # 4h deploy key scoped to this lane (.lane/deploy-key)
 lane leave / lane down                   # done / archive the lane (deployment deleted after grace)
 ```
+
+## No repo changes needed
+
+Nothing has to be committed to the app repo. The repo name comes from the git remote, the control
+plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.local` out of git via
+`.git/info/exclude`. `lane push` does the deploy itself, so the GitHub Action and webhook are optional
+(useful when the whole team adopts lanes). Agents learn the workflow from the
+[Lane Setup skill](skills/lane-setup/SKILL.md), which works for any vendor's agent.
 
 ## Pieces
 

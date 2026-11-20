@@ -101,6 +101,14 @@ http.route({ path: "/lane", method: "GET", handler: page });
 
 route("/api/whoami", "GET", async (ctx, req) => ({ person: await authed(ctx, req) }));
 
+route("/api/repo", "GET", async (ctx, req) => {
+  await authed(ctx, req);
+  const repo = new URL(req.url).searchParams.get("repo");
+  if (!repo) throw new HttpError(400, "repo is required");
+  const cfg = await ctx.runQuery(internal.admin.repoConfig, { repo });
+  return { repo, registered: cfg !== null };
+});
+
 route("/api/lanes", "GET", async (ctx, req) => {
   await authed(ctx, req);
   return await ctx.runQuery(internal.lanes.list, { now: Date.now() });

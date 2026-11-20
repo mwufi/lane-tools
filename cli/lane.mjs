@@ -13,6 +13,9 @@ const HELP = `lane: shared per-branch cloud backends for every agent
 
 Usage: lane <command> [options]
 
+  init --url <url> [--token-stdin]   One-time personal setup (no repo changes)
+  doctor                  Check node, URL, token, network and whether this repo is registered
+  push [git args]         git push, then redeploy the lane if convex/ changed and wait until live
   up                      Create or reuse this branch's lane, deploy the pushed HEAD, write .env.local
   join --task "..."       up, then register this agent on the lane page (vendor/thread auto-detected)
   status [--json]         Lane state, URLs, deployed vs HEAD, other agents and recent activity
@@ -64,16 +67,16 @@ function die(msg) {
 
 const repoRoot = git(["rev-parse", "--show-toplevel"]);
 const gitDir = git(["rev-parse", "--absolute-git-dir"]);
-const fileCfg = (() => {
-  for (const p of [repoRoot && path.join(repoRoot, ".lane.json"), path.join(os.homedir(), ".config/lane/config.json")]) {
-    if (p && fs.existsSync(p)) {
-      try {
-        return JSON.parse(fs.readFileSync(p, "utf8"));
-      } catch {}
-    }
+const CONFIG_DIR = path.join(os.homedir(), ".config/lane");
+function readJson(p) {
+  try {
+    return p && fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
+  } catch {
+    return {};
   }
-  return {};
-})();
+}
+// Personal config (~/.config/lane/config.json) first, then an optional committed .lane.json.
+const fileCfg = { ...readJson(path.join(CONFIG_DIR, "config.json")), ...readJson(repoRoot && path.join(repoRoot, ".lane.json")) };
 
 const LANE_URL = (process.env.LANE_URL || fileCfg.url || "").replace(/\/$/, "");
 const LANE_TOKEN =
@@ -224,6 +227,12 @@ async function up({ quiet = false } = {}) {
   }
   if (v.lane.state === "failed") die("lane provisioning failed: " + v.lane.error);
   if (ensured.created) log(`  provisioned ${v.lane.deploymentName} in ${secs(Date.now() - t0)}`);
+  excludeLocalFiles();
+  if (headSha && v.lane.headSha && v.lane.headSha !== headSha) {
+    // Someone did a plain `git push`: catch the lane up to what's on the branch now.
+    await reportPush(repo, branch, v.lane.headSha, headSha);
+    v = await getLane(repo, branch);
+  }
   if (v.lane.headSha && v.lane.deployedSha !== v.lane.headSha) {
     if (v.lane.deploying) {
       log(`  ${v.lane.deploying.holder} is deploying ${short(v.lane.deploying.sha)}; waiting`);
@@ -242,6 +251,115 @@ async function up({ quiet = false } = {}) {
     log(`  wrote .env.local`);
   }
   return { repo, branch, view: v };
+}
+
+// Keep lane's local files out of `git status` without touching the repo's .gitignore.
+function excludeLocalFiles() {
+  if (!gitDir || !repoRoot) return;
+  const p = path.join(gitDir, "info", "exclude");
+  const have = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";
+  const missing = [".lane/", ".env.local"].filter((l) => !have.split("\n").includes(l));
+  if (!missing.length) return;
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.appendFileSync(p, (have && !have.endsWith("\n") ? "\n" : "") + "# lane\n" + missing.join("\n") + "\n");
+}
+
+// Tell lane-control the branch moved. convex/ unchanged -> no deploy needed.
+async function reportPush(repo, branch, oldSha, newSha) {
+  let convexChanged = true;
+  if (oldSha && git(["cat-file", "-e", oldSha + "^{commit}"]) !== null) {
+    const diff = git(["diff", "--name-only", oldSha, newSha, "--", "convex/"]);
+    if (diff !== null) convexChanged = diff.length > 0;
+  }
+  const actor = `${detectAgent().vendor}/${process.env.LANE_PERSON || os.userInfo().username}`;
+  return await api("POST", "/api/lane/push", { repo, branch, sha: newSha, convexChanged, actor });
+}
+
+// git push, then make the lane follow it and wait until it's live. Replaces the CI deployer.
+async function push() {
+  const repo = repoId();
+  const branch = branchName();
+  const t0 = Date.now();
+  const before = git(["rev-parse", `refs/remotes/origin/${branch}`]);
+  const hasUpstream = git(["rev-parse", "--abbrev-ref", "@{u}"]) !== null;
+  const extra = args._.slice(1);
+  try {
+    execFileSync("git", ["push", ...(hasUpstream ? [] : ["-u", "origin", branch]), ...extra], { stdio: "inherit" });
+  } catch {
+    die("git push failed");
+  }
+  const sha = git(["rev-parse", "HEAD"]);
+  let view;
+  try {
+    view = await getLane(repo, branch);
+  } catch (e) {
+    if (e.status === 404) {
+      log(`Pushed. No lane for ${branch} yet; run \`lane join --task "..."\` to start one.`);
+      return;
+    }
+    throw e;
+  }
+  if (["archived", "deleted"].includes(view.lane.state)) {
+    log(`Pushed. The lane for ${branch} is ${view.lane.state}; run \`lane join\` to bring it back.`);
+    return;
+  }
+  const res = await reportPush(repo, branch, view.lane.headSha || before, sha);
+  if (!res.deployNeeded) {
+    log(`${short(sha)} is live on ${branch} (convex/ unchanged, no deploy) in ${secs(Date.now() - t0)}`);
+  } else {
+    if ((await deploy(repo, branch)) === false) die(`deploy of ${short(sha)} failed; the lane still runs ${short(view.lane.deployedSha)}`);
+    await waitFor(repo, branch, sha);
+  }
+  if (readState("agent.json")) await heartbeat("working").catch(() => {});
+}
+
+// One-time personal setup: control plane URL + token, no repo changes.
+async function init() {
+  const url = typeof args.url === "string" ? args.url.replace(/\/$/, "") : LANE_URL;
+  if (!url) die("pass --url https://<your lane-control>.convex.site");
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const cfgPath = path.join(CONFIG_DIR, "config.json");
+  fs.writeFileSync(cfgPath, JSON.stringify({ ...readJson(cfgPath), url }, null, 2) + "\n");
+  let token = process.env.LANE_TOKEN || "";
+  if (args["token-stdin"]) token = fs.readFileSync(0, "utf8").trim();
+  if (token) fs.writeFileSync(path.join(CONFIG_DIR, "token"), token + "\n", { mode: 0o600 });
+  log(`Saved ${cfgPath}${token ? " and ~/.config/lane/token" : ""}`);
+  excludeLocalFiles();
+  await doctor({ url, token: token || LANE_TOKEN });
+}
+
+async function doctor(over = {}) {
+  const url = over.url || LANE_URL;
+  const token = over.token || LANE_TOKEN;
+  let ok = true;
+  const check = (good, label, hint) => {
+    console.log(`${good ? "ok  " : "FAIL"} ${label}${!good && hint ? "\n     -> " + hint : ""}`);
+    ok &&= good;
+    return good;
+  };
+  check(Number(process.versions.node.split(".")[0]) >= 20, `node ${process.versions.node}`, "install Node 20 or newer");
+  if (!check(!!url, `control plane ${url || "(unset)"}`, "lane init --url https://<lane-control>.convex.site")) return process.exit(1);
+  if (!check(!!token, "token present", "set LANE_TOKEN, or: lane init --token-stdin < token-file")) return process.exit(1);
+  let who = null;
+  try {
+    const r = await fetch(url + "/api/whoami", { headers: { authorization: "Bearer " + token } });
+    who = r.ok ? (await r.json()).person : null;
+    check(!!who, who ? `signed in as ${who}` : `token rejected (${r.status})`, "ask a lane admin for a new token");
+  } catch (e) {
+    check(false, `can't reach ${url}: ${e.message}`, "allow *.convex.site (and *.convex.cloud, api.convex.dev) in this environment's network policy");
+  }
+  if (repoRoot) {
+    const repo = repoId();
+    try {
+      const r = await fetch(`${url}/api/repo?repo=${encodeURIComponent(repo)}`, { headers: { authorization: "Bearer " + token } });
+      const j = await r.json();
+      check(!!j.registered, `repo ${repo} ${j.registered ? "is registered for lanes" : "is NOT registered"}`, "a lane admin runs: npx convex run admin:registerRepo (see lane-tools README)");
+    } catch {}
+    const b = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    console.log(`     branch ${b}${b === "main" || b === "master" ? " (lanes are for feature branches)" : ""}`);
+  } else console.log("     not inside a git repo; repo checks skipped");
+  console.log(ok ? "lane is ready." : "fix the FAIL lines above.");
+  if (!ok) process.exitCode = 1;
 }
 
 function writeEnv(lane) {
@@ -288,6 +406,7 @@ async function join() {
     log(`  Also on this lane:`);
     for (const a of others) log(`   - ${a.vendor}/${a.person}: ${a.task} [${a.status}]`);
   } else log(`  You're the only agent on this lane.`);
+  if (!view.lane.headSha) log(`  ${branch} isn't pushed yet; \`lane push\` deploys it to the lane.`);
 }
 
 async function heartbeat(status) {
@@ -494,6 +613,9 @@ async function postReceive() {
 
 const commands = {
   up: () => up(),
+  push,
+  init,
+  doctor: () => doctor(),
   join,
   status,
   list,
