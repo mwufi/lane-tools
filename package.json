@@ -1,0 +1,15 @@
+{
+  "name": "lane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Per-branch lanes: one shared cloud backend per branch, for every agent on it.",
+  "type": "module",
+  "bin": { "lane": "cli/lane.mjs" },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p convex",
+    "deploy:control-plane": "convex deploy"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "convex": "^1.51.0" },
+  "devDependencies": { "typescript": "^5.9.0" }
+}

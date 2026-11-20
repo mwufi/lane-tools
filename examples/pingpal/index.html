@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pingpal</title>
+<!-- Point it at any lane: index.html?convex=https://<lane>.convex.cloud&me=ada -->
+<script src="https://cdn.jsdelivr.net/npm/convex@1.51.0/dist/browser.bundle.js"></script>
+<style>
+  :root { --bg:#fff7ef; --card:#fff; --fg:#2a211b; --muted:#8b7d72; --me:#ff7a59; --them:#f1e9e1; --line:#f0e4d8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1714; --card:#241f1b; --fg:#f4ece4; --muted:#a39385; --me:#ff7a59; --them:#332c26; --line:#3a322b; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 ui-rounded, ui-sans-serif, system-ui, sans-serif; }
+  .app { max-width: 760px; margin: 0 auto; padding: 20px 16px; display:grid; grid-template-columns: 200px 1fr; gap: 14px; min-height: 100vh; }
+  @media (max-width: 600px) { .app { grid-template-columns: 1fr; } }
+  h1 { font-size: 22px; margin: 0 0 12px; } h1 span { color: var(--me); }
+  .friends button { display:flex; gap:10px; align-items:center; width:100%; padding:10px; margin-bottom:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:14px; font:inherit; cursor:pointer; text-align:left; }
+  .friends button.on { border-color: var(--me); }
+  .emoji { font-size: 22px; }
+  .chat { background:var(--card); border:1px solid var(--line); border-radius: 18px; display:flex; flex-direction:column; min-height: 420px; }
+  .head { padding: 12px 16px; border-bottom: 1px solid var(--line); font-weight: 600; }
+  .msgs { flex:1; padding: 14px; display:flex; flex-direction:column; gap:8px; overflow-y:auto; }
+  .m { max-width: 75%; padding: 8px 12px; border-radius: 16px; background: var(--them); align-self:flex-start; }
+  .m.me { background: var(--me); color: #fff; align-self:flex-end; }
+  form { display:flex; gap:8px; padding: 12px; border-top: 1px solid var(--line); }
+  input { flex:1; font:inherit; padding:10px 12px; border-radius: 12px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+  form button { font:inherit; padding: 10px 14px; border:0; border-radius:12px; background: var(--me); color:#fff; cursor:pointer; }
+  .sub { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div>
+    <h1>ping<span>pal</span></h1>
+    <div class="sub" id="who"></div>
+    <div class="friends" id="friends" style="margin-top:10px"></div>
+    <div class="sub" id="lane"></div>
+  </div>
+  <div class="chat">
+    <div class="head" id="head">Pick a friend</div>
+    <div class="msgs" id="msgs"></div>
+    <form id="form"><input id="text" placeholder="say hi 👋" autocomplete="off"><button>Send</button></form>
+  </div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const url = params.get("convex");
+  const me = params.get("me") || "ada";
+  const client = new convex.ConvexClient(url);
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  $("lane").textContent = "backend: " + (url || "none").replace("https://", "");
+  let friends = [], other = params.get("with"), unsub = null;
+
+  function renderFriends() {
+    const self = friends.find((f) => f.handle === me);
+    $("who").textContent = self ? "you are " + self.emoji + " " + self.name : "";
+    $("friends").innerHTML = friends.filter((f) => f.handle !== me).map((f) =>
+      '<button data-h="' + esc(f.handle) + '" class="' + (f.handle === other ? "on" : "") + '"><span class="emoji">' + esc(f.emoji) + '</span>' + esc(f.name) + '</button>').join("");
+    for (const b of $("friends").querySelectorAll("button")) b.onclick = () => open(b.dataset.h);
+  }
+  function open(h) {
+    other = h; renderFriends();
+    const f = friends.find((x) => x.handle === h);
+    $("head").textContent = f ? f.emoji + " " + f.name : h;
+    if (unsub) unsub();
+    unsub = client.onUpdate("messages:thread", { a: me, b: h }, (msgs) => {
+      $("msgs").innerHTML = msgs.map((m) => '<div class="m ' + (m.from === me ? "me" : "") + '">' + esc(m.body) + '</div>').join("");
+      $("msgs").scrollTop = 1e9;
+    });
+  }
+  client.onUpdate("friends:list", {}, (fs) => { friends = fs; renderFriends(); if (other && !unsub) open(other); });
+  $("form").onsubmit = async (e) => {
+    e.preventDefault(); const body = $("text").value; if (!other || !body.trim()) return;
+    $("text").value = ""; await client.mutation("messages:send", { from: me, to: other, body });
+  };
+</script>
+</body>
+</html>
