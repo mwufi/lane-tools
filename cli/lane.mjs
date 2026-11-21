@@ -482,7 +482,8 @@ async function deploy(repo, branch) {
     try {
       // Fast path: this checkout is exactly the pushed commit, so deploy it in place with its
       // node_modules. Otherwise use a clean worktree at that commit.
-      const dir = cleanCheckoutAt(sha) ? repoRoot : (wt = checkout(sha, branch));
+      const inPlace = cleanCheckoutAt(sha);
+      const dir = inPlace ? repoRoot : (wt = checkout(sha, branch));
       const env = { ...process.env, CONVEX_DEPLOY_KEY: claim.deployKey };
       delete env.CONVEX_DEPLOYMENT;
       const tDeploy = Date.now();
@@ -495,6 +496,8 @@ async function deploy(repo, branch) {
         seeded = true;
         detail += `, setup (${setup.length} fn) ${secs(Date.now() - tSeed)}`;
       }
+      // `convex deploy` regenerates convex/_generated; don't leave that diff in someone's checkout.
+      if (inPlace) git(["checkout", "--", "convex/_generated"], { cwd: repoRoot });
       ok = true;
       detail += `, total ${secs(Date.now() - t0)}`;
     } catch (e) {
