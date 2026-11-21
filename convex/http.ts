@@ -91,6 +91,112 @@ function route(
   });
 }
 
+// ---------------------------------------------------------------- GitHub login
+// One GitHub OAuth App per lane-control install. The CLI uses the device flow (no secret on
+// laptops); the lane page uses the web flow. Either way GitHub proves who you are, we check
+// the allowlist, then mint a normal lane token (stored hashed). GitHub tokens are not kept.
+
+function csv(name: string): string[] {
+  return (process.env[name] ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+}
+
+async function loginWithGithub(ctx: ActionCtx, accessToken: string, label: string) {
+  const gh = (path: string) =>
+    fetch("https://api.github.com" + path, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.github+json", "User-Agent": "lane-control" },
+    });
+  const me = await gh("/user");
+  if (!me.ok) throw new HttpError(401, "GitHub rejected the sign-in");
+  const login = String(((await me.json()) as { login?: unknown }).login ?? "");
+  if (!login) throw new HttpError(401, "GitHub returned no username");
+  const users = csv("LANE_ALLOWED_GITHUB_USERS");
+  const orgs = csv("LANE_ALLOWED_GITHUB_ORGS");
+  let allowed = users.includes(login.toLowerCase());
+  if (!allowed && orgs.length) {
+    const res = await gh("/user/orgs?per_page=100");
+    const mine = res.ok ? ((await res.json()) as Array<{ login: string }>).map((o) => o.login.toLowerCase()) : [];
+    allowed = mine.some((o) => orgs.includes(o));
+  }
+  if (!allowed) {
+    throw new HttpError(
+      403,
+      `${login} isn't allowed on this lane-control. An admin adds you to LANE_ALLOWED_GITHUB_USERS or LANE_ALLOWED_GITHUB_ORGS.`,
+    );
+  }
+  const token: string = await ctx.runAction(internal.admin.createToken, { person: login });
+  await ctx.runMutation(internal.admin.noteLogin, { person: login, via: label });
+  return { token, person: login };
+}
+
+route("/api/auth/config", "GET", async () => ({
+  githubClientId: process.env.GITHUB_CLIENT_ID ?? null,
+  webLogin: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+}));
+
+// The CLI finished GitHub's device flow and hands us the GitHub token once.
+route("/api/auth/github", "POST", async (ctx, req) => {
+  const b = await body(req);
+  const accessToken = str(b, "accessToken");
+  return await loginWithGithub(ctx, accessToken, "cli");
+});
+
+async function signState(nonce: string): Promise<string> {
+  return nonce + "." + (await hmacSha256Hex(process.env.GITHUB_CLIENT_SECRET ?? "", nonce));
+}
+
+http.route({
+  path: "/auth/github/start",
+  method: "GET",
+  handler: httpAction(async () => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return new Response("GitHub sign-in isn't configured on this lane-control.", { status: 501 });
+    }
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0")).join("");
+    const u = new URL("https://github.com/login/oauth/authorize");
+    u.searchParams.set("client_id", process.env.GITHUB_CLIENT_ID);
+    u.searchParams.set("scope", "read:org");
+    u.searchParams.set("redirect_uri", `${process.env.CONVEX_SITE_URL}/auth/github/callback`);
+    u.searchParams.set("state", await signState(nonce));
+    return new Response(null, { status: 302, headers: { Location: u.toString() } });
+  }),
+});
+
+http.route({
+  path: "/auth/github/callback",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const u = new URL(req.url);
+    const code = u.searchParams.get("code");
+    const state = u.searchParams.get("state") ?? "";
+    const nonce = state.split(".")[0] ?? "";
+    const fail = (msg: string) =>
+      new Response(`<p>Sign-in failed: ${msg.replace(/[<>&]/g, "")}</p><p><a href="/">Back to lanes</a></p>`, {
+        status: 400,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    if (!code || !nonce || !timingSafeEqual(state, await signState(nonce))) return fail("bad or expired state");
+    const res = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: `${process.env.CONVEX_SITE_URL}/auth/github/callback`,
+      }),
+    });
+    const j = (await res.json()) as { access_token?: string; error_description?: string };
+    if (!j.access_token) return fail(j.error_description ?? "GitHub didn't return a token");
+    try {
+      const { token } = await loginWithGithub(ctx, j.access_token, "web");
+      // The page reads the token from the fragment, keeps it in localStorage, and strips the URL.
+      return new Response(null, { status: 302, headers: { Location: `/#token=${token}` } });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  }),
+});
+
 // ---------------------------------------------------------------- pages
 
 const page = httpAction(async () => new Response(PAGE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } }));

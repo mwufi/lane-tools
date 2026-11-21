@@ -25,6 +25,15 @@ export const storeToken = internalMutation({
   },
 });
 
+export const noteLogin = internalMutation({
+  args: { person: v.string(), via: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("logins", { ...args, at: Date.now() });
+    return null;
+  },
+});
+
 export const revokeToken = internalMutation({
   args: { person: v.string() },
   returns: v.number(),
@@ -79,6 +88,20 @@ export const registerRepo = internalMutation({
       .unique();
     if (existing) await ctx.db.replace("repos", existing._id, doc);
     else await ctx.db.insert("repos", doc);
+    return null;
+  },
+});
+
+export const setGrace = internalMutation({
+  args: { repo: v.string(), graceMs: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { repo, graceMs }) => {
+    const r = await ctx.db
+      .query("repos")
+      .withIndex("by_repo", (q) => q.eq("repo", repo))
+      .unique();
+    if (!r) throw new Error(`repo ${repo} is not registered`);
+    await ctx.db.patch("repos", r._id, { graceMs });
     return null;
   },
 });

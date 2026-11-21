@@ -80,9 +80,11 @@ async function api(path) {
   const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
 }
 
-function askToken(msg) {
-  $("#app").innerHTML = '<h1>Lanes</h1><p class="sub">' + esc(msg || "Paste your lane token to view lanes. It stays in this browser.") +
-    '</p><div class="row"><input id="tok" type="password" placeholder="lane_…"><button id="go">View</button></div>';
+async function askToken(msg) {
+  let cfg = {}; try { cfg = await (await fetch("/api/auth/config")).json(); } catch {}
+  $("#app").innerHTML = '<h1>Lanes</h1><p class="sub">' + esc(msg || "Sign in to see who's working on which branch.") + '</p>' +
+    (cfg.webLogin ? '<p><a href="/auth/github/start"><button>Sign in with GitHub</button></a></p><p class="sub">or paste a lane token:</p>' : '') +
+    '<div class="row"><input id="tok" type="password" placeholder="lane_…"><button id="go">View</button></div>';
   $("#go").onclick = () => { TOKEN = $("#tok").value.trim(); try { localStorage.setItem("laneToken", TOKEN); } catch {} tick(); };
 }
 

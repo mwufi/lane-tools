@@ -13,7 +13,8 @@ const HELP = `lane: shared per-branch cloud backends for every agent
 
 Usage: lane <command> [options]
 
-  init --url <url> [--token-stdin]   One-time personal setup (no repo changes)
+  login [--url <url>] [--print]      Sign in with GitHub; saves your lane token (--print: for cloud envs)
+  init --url <url> [--token-stdin]   Set up with a token you already have (no repo changes)
   doctor                  Check node, URL, token, network and whether this repo is registered
   push [git args]         git push, then redeploy the lane if convex/ changed and wait until live
   up                      Create or reuse this branch's lane, deploy the pushed HEAD, write .env.local
@@ -311,6 +312,63 @@ async function push() {
     await waitFor(repo, branch, sha);
   }
   if (readState("agent.json")) await heartbeat("working").catch(() => {});
+}
+
+// Sign in with GitHub (device flow): no secrets on this machine except the resulting lane token.
+async function login() {
+  const url = (typeof args.url === "string" ? args.url : LANE_URL).replace(/\/$/, "");
+  if (!url) die("pass --url https://<your lane-control>.convex.site the first time");
+  const cfg = await (await fetch(url + "/api/auth/config")).json();
+  if (!cfg.githubClientId) die("GitHub login isn't set up on this lane-control yet (GITHUB_CLIENT_ID is unset)");
+  const form = (o) => new URLSearchParams(o).toString();
+  const gh = async (p, body) => {
+    const r = await fetch("https://github.com" + p, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: form(body),
+    });
+    return await r.json();
+  };
+  const dc = await gh("/login/device/code", { client_id: cfg.githubClientId, scope: "read:org" });
+  if (!dc.device_code) die("GitHub refused the login request: " + (dc.error_description || dc.error || "unknown error") + " (is Device Flow enabled on the OAuth app?)");
+  console.error(`\nOpen ${dc.verification_uri} and enter this code:\n\n    ${dc.user_code}\n`);
+  if (!args["no-browser"]) {
+    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+    try { spawn(opener, [dc.verification_uri], { stdio: "ignore", detached: true }).unref(); } catch {}
+  }
+  let interval = (dc.interval || 5) * 1000;
+  const deadline = Date.now() + (dc.expires_in || 900) * 1000;
+  let accessToken = null;
+  while (!accessToken && Date.now() < deadline) {
+    await sleep(interval);
+    const r = await gh("/login/oauth/access_token", {
+      client_id: cfg.githubClientId,
+      device_code: dc.device_code,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+    });
+    if (r.access_token) accessToken = r.access_token;
+    else if (r.error === "slow_down") interval += 5000;
+    else if (r.error !== "authorization_pending") die("GitHub login failed: " + (r.error_description || r.error));
+  }
+  if (!accessToken) die("timed out waiting for you to approve on GitHub");
+  const res = await fetch(url + "/api/auth/github", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ accessToken }),
+  });
+  const j = await res.json();
+  if (!res.ok) die(j.error || `login failed (${res.status})`);
+  if (args.print) {
+    // For cloud agent environments: paste this as LANE_TOKEN in the vendor's secrets.
+    console.log(j.token);
+    console.error(`Signed in as ${j.person}. The token above is for a cloud environment's LANE_TOKEN; keep it secret.`);
+    return;
+  }
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const cfgPath = path.join(CONFIG_DIR, "config.json");
+  fs.writeFileSync(cfgPath, JSON.stringify({ ...readJson(cfgPath), url }, null, 2) + "\n");
+  fs.writeFileSync(path.join(CONFIG_DIR, "token"), j.token + "\n", { mode: 0o600 });
+  console.error(`Signed in as ${j.person}. Saved to ~/.config/lane/. Try: lane list`);
 }
 
 // One-time personal setup: control plane URL + token, no repo changes.
@@ -627,6 +685,7 @@ async function postReceive() {
 
 const commands = {
   up: () => up(),
+  login,
   push,
   init,
   doctor: () => doctor(),

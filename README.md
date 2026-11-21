@@ -5,7 +5,7 @@ person at a laptop all run the same CLI. v0 of the design in "Convex preview con
 
 ```
 npm install -g github:mwufi/lane-tools
-lane init --url https://<lane-control>.convex.site --token-stdin < my-token   # once per machine
+lane login --url https://<lane-control>.convex.site   # once per machine: sign in with GitHub
 lane doctor                              # checks node, URL, token, network, repo registered
 
 lane join --task "Add emoji reactions"   # create or reuse this branch's lane, register on its page
@@ -47,7 +47,20 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 - Archive -> keys revoked now, deployment deleted after `graceMs` (3 days by default). A reopened PR in the grace period gets the same deployment back.
 - Dormant lanes (14 days without activity) are archived by a cron.
 
-## Setup
+## Setup (once per team)
+
+1. Deploy lane-control (below) and register your repos.
+2. **GitHub sign-in:** create a GitHub OAuth App (Settings, Developer settings, OAuth Apps). Homepage URL
+   `https://<lane-control>.convex.site`, callback URL `https://<lane-control>.convex.site/auth/github/callback`,
+   and tick **Enable Device Flow**. On the lane-control deployment set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
+   and who may sign in: `LANE_ALLOWED_GITHUB_ORGS` and/or `LANE_ALLOWED_GITHUB_USERS` (comma-separated).
+   People then run `lane login`; cloud agent environments use `lane login --print` once and store the result as `LANE_TOKEN`.
+3. **Cleanup on merge:** add a webhook on each repo (Settings, Webhooks): payload URL
+   `https://<lane-control>.convex.site/github/webhook`, content type `application/json`, a random secret that you
+   also set as `GITHUB_WEBHOOK_SECRET` on lane-control, events "Pushes" and "Pull requests". A merged or closed PR
+   archives its lane (keys revoked at once, backend deleted after the repo's grace period, 3 days by default).
+
+### Deploying lane-control
 
 ```sh
 npm install

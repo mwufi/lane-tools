@@ -34,6 +34,9 @@ export default defineSchema({
     revoked: v.boolean(),
   }).index("by_hash", ["hash"]),
 
+  // Audit trail of GitHub sign-ins (who, CLI or web, when).
+  logins: defineTable({ person: v.string(), via: v.string(), at: v.number() }),
+
   lanes: defineTable({
     repo: v.string(),
     branch: v.string(),
