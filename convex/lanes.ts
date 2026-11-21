@@ -396,6 +396,18 @@ export const logLaneEvent = internalMutation({
 
 // ---------------------------------------------------------------- agents
 
+const ADJECTIVES = ["spicy", "sleepy", "brave", "fuzzy", "lucky", "quiet", "swift", "jolly", "salty", "sunny", "mighty", "witty", "zesty", "cosmic", "dapper", "nimble", "rusty", "silver", "bouncy", "curious", "gentle", "plucky", "snappy", "tidy", "wild", "crisp", "mellow", "bold", "frosty", "velvet"];
+const ANIMALS = ["lobster", "otter", "falcon", "panda", "gecko", "heron", "badger", "koala", "lynx", "marmot", "narwhal", "octopus", "puffin", "quokka", "raven", "salmon", "tapir", "walrus", "yak", "zebra", "beaver", "coyote", "dingo", "ferret", "ibis", "jackal", "lemur", "moose", "newt", "orca"];
+
+/** A short, memorable name that is unique among the agents on this lane. */
+function agentName(taken: Set<string>): string {
+  for (let i = 0; i < 50; i++) {
+    const n = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)] + "-" + ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+    if (!taken.has(n)) return n;
+  }
+  return "agent-" + Math.floor(Math.random() * 1e6).toString(36);
+}
+
 export const join = internalMutation({
   args: {
     repo: v.string(),
@@ -407,7 +419,7 @@ export const join = internalMutation({
     threadUrl: v.optional(v.string()),
     agentId: v.optional(v.id("laneAgents")),
   },
-  returns: v.id("laneAgents"),
+  returns: v.object({ agentId: v.id("laneAgents"), name: v.string() }),
   handler: async (ctx, args) => {
     const lane = await laneFor(ctx, args.repo, args.branch);
     if (!lane) throw new Error("no lane for this branch; run `lane up` first");
@@ -421,11 +433,17 @@ export const join = internalMutation({
           lastSeen: now,
           threadUrl: args.threadUrl ?? prev.threadUrl,
         });
-        return prev._id;
+        return { agentId: prev._id, name: prev.name ?? prev.vendor };
       }
     }
+    const existing = await ctx.db
+      .query("laneAgents")
+      .withIndex("by_laneId", (q) => q.eq("laneId", lane._id))
+      .take(500);
+    const name = agentName(new Set(existing.map((a) => a.name ?? "")));
     const id = await ctx.db.insert("laneAgents", {
       laneId: lane._id,
+      name,
       vendor: args.vendor,
       person: args.person,
       task: args.task,
@@ -436,8 +454,8 @@ export const join = internalMutation({
       lastSeen: now,
     });
     await ctx.db.patch("lanes", lane._id, { lastActivity: now });
-    await logEvent(ctx, lane._id, "join", `${args.vendor}/${args.person}`, args.task);
-    return id;
+    await logEvent(ctx, lane._id, "join", name, args.task);
+    return { agentId: id, name };
   },
 });
 
@@ -457,7 +475,7 @@ export const heartbeat = internalMutation({
     if (args.lastSha) patch.lastSha = args.lastSha;
     await ctx.db.patch("laneAgents", agent._id, patch);
     if (args.status === "done" && agent.status !== "done") {
-      await logEvent(ctx, agent.laneId, "leave", `${agent.vendor}/${agent.person}`, agent.task);
+      await logEvent(ctx, agent.laneId, "leave", agent.name ?? `${agent.vendor}/${agent.person}`, agent.task);
     }
     return null;
   },
@@ -501,11 +519,12 @@ export const view = internalQuery({
       .order("desc")
       .take(200);
     // Only this incarnation of the lane; older ones are history from before a re-provision.
-    const current = events.filter((e) => e.at >= lane.createdAt).slice(0, 30);
+    const current = events.filter((e) => e.at >= lane.createdAt).slice(0, 150);
     return {
       lane: laneSummary(lane),
       agents: agents.map((a) => ({
         id: a._id,
+        name: a.name ?? null,
         vendor: a.vendor,
         person: a.person,
         task: a.task,

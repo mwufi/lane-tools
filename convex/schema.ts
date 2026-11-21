@@ -64,6 +64,7 @@ export default defineSchema({
   // High-churn heartbeat rows live apart from the lane row.
   laneAgents: defineTable({
     laneId: v.id("lanes"),
+    name: v.optional(v.string()), // unique per lane, e.g. "spicy-lobster"
     vendor: v.string(), // claude | codex | cursor | amp | human | other
     person: v.string(),
     task: v.string(),

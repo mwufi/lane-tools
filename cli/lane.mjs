@@ -272,7 +272,8 @@ async function reportPush(repo, branch, oldSha, newSha) {
     const diff = git(["diff", "--name-only", oldSha, newSha, "--", "convex/"]);
     if (diff !== null) convexChanged = diff.length > 0;
   }
-  const actor = `${detectAgent().vendor}/${process.env.LANE_PERSON || os.userInfo().username}`;
+  const me = readState("agent.json");
+  const actor = me?.name || `${detectAgent().vendor}/${process.env.LANE_PERSON || os.userInfo().username}`;
   return await api("POST", "/api/lane/push", { repo, branch, sha: newSha, convexChanged, actor });
 }
 
@@ -454,15 +455,15 @@ async function join() {
     person: process.env.LANE_PERSON,
     agentId: prev && prev.repo === repo && prev.branch === branch ? prev.agentId : undefined,
   });
-  writeState("agent.json", { agentId: res.agentId, repo, branch });
+  writeState("agent.json", { agentId: res.agentId, name: res.name, repo, branch });
   const others = view.agents.filter((a) => a.id !== res.agentId && a.status !== "done");
   if (args.json) return console.log(JSON.stringify({ agentId: res.agentId, lane: view.lane, others }, null, 2));
-  log(`Joined ${repo}@${branch} as ${id.vendor} (${id.machine})${id.threadUrl ? " · " + id.threadUrl : ""}`);
+  log(`Joined ${repo}@${branch} as ${res.name} (${id.vendor}, ${id.machine})${id.threadUrl ? " · " + id.threadUrl : ""}`);
   log(`  convex ${view.lane.deploymentUrl} · deployed ${short(view.lane.deployedSha)}`);
   log(`  page   ${pageUrl(repo, branch)}`);
   if (others.length) {
     log(`  Also on this lane:`);
-    for (const a of others) log(`   - ${a.vendor}/${a.person}: ${a.task} [${a.status}]`);
+    for (const a of others) log(`   - ${a.name || a.vendor} (${a.vendor}, ${a.person}): ${a.task} [${a.status}]`);
   } else log(`  You're the only agent on this lane.`);
   if (!view.lane.headSha) log(`  ${branch} isn't pushed yet; \`lane push\` deploys it to the lane.`);
 }
@@ -490,7 +491,7 @@ async function status() {
   if (l.error) console.log(`  error     ${l.error.split("\n")[0]}`);
   console.log(`  page      ${pageUrl(repo, branch)}`);
   console.log(`  agents:`);
-  for (const a of v.agents) console.log(`   - ${a.vendor}/${a.person} [${a.status}] ${a.task}${a.threadUrl ? "  " + a.threadUrl : ""}`);
+  for (const a of v.agents) console.log(`   - ${a.name || a.vendor} (${a.vendor}, ${a.person}) [${a.status}] ${a.task}${a.threadUrl ? "  " + a.threadUrl : ""}`);
   console.log(`  recent:`);
   for (const e of v.events.slice(0, 8)) console.log(`   ${new Date(e.at).toISOString().slice(11, 19)} ${e.type.padEnd(13)} ${e.actor}: ${e.detail}`);
 }
@@ -519,7 +520,7 @@ async function waitFor(repo, branch, sha, timeoutMs = 10 * 60_000) {
 
 // The serialized deployer. Always deploys what's pushed to the branch, never a working tree.
 async function deploy(repo, branch) {
-  const holder = `${process.env.LANE_DEPLOYER || detectAgent().vendor + "@" + os.hostname()}#${process.pid}`;
+  const holder = `${process.env.LANE_DEPLOYER || readState("agent.json")?.name || detectAgent().vendor + "@" + os.hostname()}#${process.pid}`;
   for (let round = 0; round < 10; round++) {
     const claim = await api("POST", "/api/deploy/claim", { repo, branch, holder, force: round === 0 && !!args.force });
     if (claim.status === "busy") {

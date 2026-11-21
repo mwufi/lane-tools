@@ -344,7 +344,7 @@ route("/api/agents/join", "POST", async (ctx, req) => {
   const b = await body(req);
   const repo = str(b, "repo");
   const branch = str(b, "branch");
-  const agentId = await ctx.runMutation(internal.lanes.join, {
+  const joined = await ctx.runMutation(internal.lanes.join, {
     repo,
     branch,
     vendor: str(b, "vendor"),
@@ -354,7 +354,7 @@ route("/api/agents/join", "POST", async (ctx, req) => {
     threadUrl: optStr(b, "threadUrl"),
     agentId: optStr(b, "agentId") as Id<"laneAgents"> | undefined,
   });
-  return { agentId };
+  return joined;
 });
 
 route("/api/agents/heartbeat", "POST", async (ctx, req) => {
