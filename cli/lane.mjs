@@ -480,17 +480,20 @@ async function deploy(repo, branch) {
     let detail = "";
     let wt;
     try {
-      wt = checkout(sha, branch);
+      // Fast path: this checkout is exactly the pushed commit, so deploy it in place with its
+      // node_modules. Otherwise use a clean worktree at that commit.
+      const dir = cleanCheckoutAt(sha) ? repoRoot : (wt = checkout(sha, branch));
       const env = { ...process.env, CONVEX_DEPLOY_KEY: claim.deployKey };
       delete env.CONVEX_DEPLOYMENT;
       const tDeploy = Date.now();
-      run("npx", ["convex", "deploy", "-y"], wt, env);
+      run("npx", ["convex", "deploy", "-y", ...(claim.deployArgs || [])], dir, env);
       detail = `deploy ${secs(Date.now() - tDeploy)}`;
-      if (claim.seedFunction) {
+      const setup = claim.setupFunctions || (claim.seedFunction ? [claim.seedFunction] : []);
+      if (setup.length) {
         const tSeed = Date.now();
-        run("npx", ["convex", "run", claim.seedFunction], wt, env);
+        for (const fn of setup) run("npx", ["convex", "run", fn], dir, env);
         seeded = true;
-        detail += `, seed ${secs(Date.now() - tSeed)}`;
+        detail += `, setup (${setup.length} fn) ${secs(Date.now() - tSeed)}`;
       }
       ok = true;
       detail += `, total ${secs(Date.now() - t0)}`;
@@ -520,6 +523,14 @@ function run(bin, argv, cwd, env) {
   } catch (e) {
     throw new Error(`${bin} ${argv.join(" ")} failed:\n${(e.stdout || "") + (e.stderr || "")}`);
   }
+}
+
+function cleanCheckoutAt(sha) {
+  if (!repoRoot || git(["rev-parse", "HEAD"]) !== sha) return false;
+  if (!fs.existsSync(path.join(repoRoot, "node_modules"))) return false;
+  // Anything uncommitted under convex/ or in package files would leak into the deploy.
+  const dirty = git(["status", "--porcelain", "--untracked-files=all", "--", "convex", "package.json", "package-lock.json"]);
+  return dirty === "";
 }
 
 // A clean worktree at exactly `sha`, with node_modules shared by lockfile hash.

@@ -212,7 +212,8 @@ route("/api/deploy/claim", "POST", async (ctx, req) => {
     status: claim.status,
     sha: claim.sha,
     deployKey: minted.key,
-    seedFunction: claim.needSeed ? cfg?.seedFunction ?? null : null,
+    setupFunctions: claim.needSeed ? cfg?.setupFunctions ?? [] : [],
+    deployArgs: cfg?.deployArgs ?? [],
   };
 });
 

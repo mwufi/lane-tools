@@ -57,6 +57,8 @@ export const registerRepo = internalMutation({
     repo: v.string(),
     convexProjectId: v.number(),
     seedFunction: v.optional(v.string()),
+    setupFunctions: v.optional(v.array(v.string())),
+    deployArgs: v.optional(v.array(v.string())),
     env: v.optional(v.record(v.string(), v.string())),
     graceMs: v.optional(v.number()),
   },
@@ -66,6 +68,8 @@ export const registerRepo = internalMutation({
       repo: args.repo,
       convexProjectId: args.convexProjectId,
       seedFunction: args.seedFunction,
+      setupFunctions: args.setupFunctions,
+      deployArgs: args.deployArgs,
       env: args.env ?? {},
       graceMs: args.graceMs ?? 3 * 24 * 60 * 60_000,
     };
@@ -86,6 +90,10 @@ export const repoConfig = internalQuery({
       .query("repos")
       .withIndex("by_repo", (q) => q.eq("repo", repo))
       .unique();
-    return r ? { seedFunction: r.seedFunction ?? null } : null;
+    if (!r) return null;
+    return {
+      setupFunctions: r.setupFunctions ?? (r.seedFunction ? [r.seedFunction] : []),
+      deployArgs: r.deployArgs ?? [],
+    };
   },
 });

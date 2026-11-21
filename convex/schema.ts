@@ -21,6 +21,8 @@ export default defineSchema({
     repo: v.string(), // "owner/name"
     convexProjectId: v.number(), // project that lane deployments are created in
     seedFunction: v.optional(v.string()), // e.g. "seed:run", run once per lane after first deploy
+    setupFunctions: v.optional(v.array(v.string())), // run in order once per lane (migrations, then seed); overrides seedFunction
+    deployArgs: v.optional(v.array(v.string())), // extra `convex deploy` args, e.g. ["--typecheck", "disable"]
     env: v.record(v.string(), v.string()), // env vars set on every lane deployment
     graceMs: v.number(), // delay between archive and deployment delete
   }).index("by_repo", ["repo"]),
