@@ -16,6 +16,19 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
 }
 
+/** Per-lane values that the repo's allowlist still permits. */
+export function allowedLaneEnv(
+  vars: Record<string, string>,
+  allow: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(vars)) {
+    const pattern = allow[name];
+    if (pattern !== undefined && new RegExp(`^(?:${pattern})$`).test(value)) out[name] = value;
+  }
+  return out;
+}
+
 /** Convex resource type, `ensure`: create a dev deployment and set the lane env. */
 export const provision = internalAction({
   args: { laneId: v.id("lanes") },
@@ -28,7 +41,12 @@ export const provision = internalAction({
     try {
       const reference = `lane-${slug(lane.branch)}-${Date.now().toString(36)}`;
       const dep = await createDeployment(repoCfg.convexProjectId, reference);
-      const env = { ...repoCfg.env, LANE_REPO: lane.repo, LANE_BRANCH: lane.branch };
+      const env = {
+        ...repoCfg.env,
+        ...allowedLaneEnv(lane.env ?? {}, repoCfg.laneEnvAllow ?? {}),
+        LANE_REPO: lane.repo,
+        LANE_BRANCH: lane.branch,
+      };
       // A 31-minute key used once for env setup, then deleted.
       const setupKeyName = `lane-setup-${Date.now().toString(36)}`;
       const setupKey = await createDeployKey(
@@ -51,6 +69,22 @@ export const provision = internalAction({
         laneId,
         error: e instanceof Error ? e.message : String(e),
       });
+    }
+    return null;
+  },
+});
+
+/** Set allow-listed env vars on a ready lane's deployment with a one-use env-write key. */
+export const setLaneEnv = internalAction({
+  args: { deploymentName: v.string(), deploymentUrl: v.string(), vars: v.record(v.string(), v.string()) },
+  returns: v.null(),
+  handler: async (_ctx, { deploymentName, deploymentUrl, vars }) => {
+    const keyName = `lane-env-${Date.now().toString(36)}`;
+    const key = await createDeployKey(deploymentName, keyName, ["deployment:env:write", "deployment:env:view"], 0);
+    try {
+      await setDeploymentEnv(deploymentUrl, key, vars);
+    } finally {
+      await deleteDeployKey(deploymentName, keyName).catch(() => {});
     }
     return null;
   },

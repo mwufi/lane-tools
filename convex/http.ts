@@ -293,6 +293,42 @@ route("/api/lane/event", "POST", async (ctx, req) => {
   return { ok: true };
 });
 
+route("/api/lane/env", "POST", async (ctx, req) => {
+  const person = await authed(ctx, req);
+  const b = await body(req);
+  const repo = str(b, "repo");
+  const branch = str(b, "branch");
+  const raw = b.vars;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw) || Object.keys(raw).length === 0) {
+    throw new HttpError(400, '"vars" must be a non-empty object of name -> value');
+  }
+  const t = await ctx.runQuery(internal.lanes.envTarget, { repo, branch });
+  if (!t) throw new HttpError(404, "no lane for this branch");
+  if (t.state !== "ready" || !t.deploymentName || !t.deploymentUrl) throw new HttpError(409, "lane is not ready");
+  const vars: Record<string, string> = {};
+  for (const name of Object.keys(raw)) {
+    const value = str(raw as Record<string, unknown>, name);
+    const pattern = t.allow[name];
+    if (pattern === undefined) throw new HttpError(403, `${name} is not settable per lane for ${repo}`);
+    if (!new RegExp(`^(?:${pattern})$`).test(value)) throw new HttpError(400, `${name} value is not allowed`);
+    if (t.env[name] !== value) vars[name] = value;
+  }
+  if (Object.keys(vars).length === 0) return { changed: [] };
+  await ctx.runAction(internal.provision.setLaneEnv, {
+    deploymentName: t.deploymentName,
+    deploymentUrl: t.deploymentUrl,
+    vars,
+  });
+  const ok = await ctx.runMutation(internal.lanes.recordEnv, {
+    laneId: t.laneId,
+    deploymentName: t.deploymentName,
+    vars,
+    actor: optStr(b, "actor") ?? person,
+  });
+  if (!ok) throw new HttpError(409, "lane changed while setting env; retry");
+  return { changed: Object.keys(vars).sort() };
+});
+
 // ---------------------------------------------------------------- deployer
 
 route("/api/deploy/claim", "POST", async (ctx, req) => {

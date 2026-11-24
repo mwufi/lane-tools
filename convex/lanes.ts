@@ -564,3 +564,45 @@ export const laneIdFor = internalQuery({
     return lane ? { laneId: lane._id, state: lane.state, deploymentName: lane.deploymentName ?? null } : null;
   },
 });
+
+// ---------------------------------------------------------------- per-lane env
+
+/** The ready lane and the repo's allowlist, for POST /api/lane/env. */
+export const envTarget = internalQuery({
+  args: { repo: v.string(), branch: v.string() },
+  handler: async (ctx, { repo, branch }) => {
+    const lane = await laneFor(ctx, repo, branch);
+    if (!lane) return null;
+    const repoCfg = await ctx.db
+      .query("repos")
+      .withIndex("by_repo", (q) => q.eq("repo", repo))
+      .unique();
+    return {
+      laneId: lane._id,
+      state: lane.state,
+      deploymentName: lane.deploymentName ?? null,
+      deploymentUrl: lane.deploymentUrl ?? null,
+      env: lane.env ?? {},
+      allow: repoCfg?.laneEnvAllow ?? {},
+    };
+  },
+});
+
+/** Remember env just set on the deployment, so a re-provisioned lane gets it again. */
+export const recordEnv = internalMutation({
+  args: {
+    laneId: v.id("lanes"),
+    deploymentName: v.string(),
+    vars: v.record(v.string(), v.string()),
+    actor: v.string(),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, { laneId, deploymentName, vars, actor }) => {
+    const lane = await ctx.db.get("lanes", laneId);
+    // Re-provisioned (or torn down) while the env was being set: the caller retries.
+    if (!lane || lane.deploymentName !== deploymentName || lane.state !== "ready") return false;
+    await ctx.db.patch("lanes", laneId, { env: { ...(lane.env ?? {}), ...vars } });
+    await logEvent(ctx, laneId, "env", actor, `set ${Object.keys(vars).sort().join(", ")}`);
+    return true;
+  },
+});

@@ -26,6 +26,7 @@ Usage: lane <command> [options]
   key [--print]           Mint a 4h deploy key for this lane (saved to .lane/deploy-key)
   heartbeat [--status working|waiting|done] [--task "..."]
   leave                   Mark this agent done
+  env NAME=value ...      Set allow-listed env vars on this lane (e.g. SITE_URL of the branch preview)
   down                    Archive the lane: revoke keys now, delete the deployment after grace
   page                    Print the lane page URL
   hook post-receive       Git post-receive hook: report pushes and run the deployer
@@ -636,6 +637,20 @@ async function key() {
   log(`Use it with: CONVEX_DEPLOY_KEY=$(cat .lane/deploy-key) npx convex run <fn>`);
 }
 
+async function env() {
+  const repo = repoId();
+  const branch = branchName();
+  const vars = {};
+  for (const pair of args._.slice(1)) {
+    const i = pair.indexOf("=");
+    if (i <= 0) die(`usage: lane env NAME=value ... (got "${pair}")`);
+    vars[pair.slice(0, i)] = pair.slice(i + 1);
+  }
+  if (Object.keys(vars).length === 0) die("usage: lane env NAME=value ...");
+  const res = await api("POST", "/api/lane/env", { repo, branch, vars });
+  log(res.changed.length ? `${branch}: set ${res.changed.join(", ")}` : `${branch}: env already up to date`);
+}
+
 async function down() {
   const repo = repoId();
   const branch = branchName();
@@ -703,6 +718,7 @@ const commands = {
   key,
   heartbeat: () => heartbeat(),
   leave: () => heartbeat("done"),
+  env,
   down,
   page: async () => console.log(pageUrl(repoId(), branchName())),
   hook: async () => {

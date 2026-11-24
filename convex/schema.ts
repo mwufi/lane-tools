@@ -25,6 +25,9 @@ export default defineSchema({
     deployArgs: v.optional(v.array(v.string())), // extra `convex deploy` args, e.g. ["--typecheck", "disable"]
     env: v.record(v.string(), v.string()), // env vars set on every lane deployment
     graceMs: v.number(), // delay between archive and deployment delete
+    // Per-lane env vars callers may set with POST /api/lane/env: name -> value regex
+    // (full match), e.g. {"SITE_URL": "https://app-git-[a-z0-9-]+\\.vercel\\.app"}.
+    laneEnvAllow: v.optional(v.record(v.string(), v.string())),
   }).index("by_repo", ["repo"]),
 
   // Agent/person tokens. Only the SHA-256 hash is stored.
@@ -44,6 +47,7 @@ export default defineSchema({
     deploymentName: v.optional(v.string()),
     deploymentUrl: v.optional(v.string()),
     siteUrl: v.optional(v.string()),
+    env: v.optional(v.record(v.string(), v.string())), // per-lane env set via /api/lane/env; reapplied on re-provision
     headSha: v.optional(v.string()), // what's pushed to the branch
     headConvexChanged: v.optional(v.boolean()),
     deployedSha: v.optional(v.string()), // what the backend is running
