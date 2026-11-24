@@ -45,6 +45,9 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 - A push that doesn't touch `convex/` is marked live with no deploy.
 - Keys: deployer keys last 31 min, agent keys 4h, each scoped to one deployment and logged; all revoked on archive.
 - Archive -> keys revoked now, deployment deleted after `graceMs` (3 days by default). A reopened PR in the grace period gets the same deployment back.
+- Per-lane env: only names in the repo's `laneEnvAllow` (name -> value regex, full match) can be set with
+  `lane env NAME=value` / `POST /api/lane/env`, through a one-use env-write key; lane keys themselves never
+  get env-write. Values are kept on the lane and set again if it is re-provisioned.
 - Dormant lanes (14 days without activity) are archived by a cron.
 
 ## Setup (once per team)
@@ -68,6 +71,8 @@ CONVEX_DEPLOY_KEY=<control-plane prod key> npx convex deploy
 # secrets on the control plane deployment: CONVEX_TEAM_TOKEN, GITHUB_WEBHOOK_SECRET
 npx convex run admin:registerRepo '{"repo":"owner/app","convexProjectId":123,"seedFunction":"seed:run","env":{"APP_ENV":"lane"}}'
 npx convex run admin:createToken '{"person":"zen"}'      # prints a token once; stored hashed
+# optional: env vars a lane may set for itself, e.g. its preview URL
+npx convex run admin:setLaneEnvAllow '{"repo":"owner/app","laneEnvAllow":{"SITE_URL":"https://app-git-[a-z0-9-]+-team\\.vercel\\.app"}}'
 ```
 
 In the app repo, commit `.lane.json` (`{"repo": "owner/app", "url": "https://<control-plane>.convex.site"}`)

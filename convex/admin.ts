@@ -70,9 +70,11 @@ export const registerRepo = internalMutation({
     deployArgs: v.optional(v.array(v.string())),
     env: v.optional(v.record(v.string(), v.string())),
     graceMs: v.optional(v.number()),
+    laneEnvAllow: v.optional(v.record(v.string(), v.string())),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.laneEnvAllow) checkAllow(args.laneEnvAllow);
     const doc = {
       repo: args.repo,
       convexProjectId: args.convexProjectId,
@@ -81,6 +83,7 @@ export const registerRepo = internalMutation({
       deployArgs: args.deployArgs,
       env: args.env ?? {},
       graceMs: args.graceMs ?? 3 * 24 * 60 * 60_000,
+      laneEnvAllow: args.laneEnvAllow,
     };
     const existing = await ctx.db
       .query("repos")
@@ -106,6 +109,30 @@ export const setGrace = internalMutation({
   },
 });
 
+function checkAllow(allow: Record<string, string>) {
+  for (const [name, pattern] of Object.entries(allow)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) throw new Error(`bad env var name ${name}`);
+    if (name.startsWith("LANE_")) throw new Error(`${name}: LANE_* vars are set by the control plane`);
+    new RegExp(`^(?:${pattern})$`); // throws on an invalid pattern
+  }
+}
+
+/** Which env vars lanes of this repo may set per lane (name -> value regex, full match). */
+export const setLaneEnvAllow = internalMutation({
+  args: { repo: v.string(), laneEnvAllow: v.record(v.string(), v.string()) },
+  returns: v.null(),
+  handler: async (ctx, { repo, laneEnvAllow }) => {
+    checkAllow(laneEnvAllow);
+    const r = await ctx.db
+      .query("repos")
+      .withIndex("by_repo", (q) => q.eq("repo", repo))
+      .unique();
+    if (!r) throw new Error(`repo ${repo} is not registered`);
+    await ctx.db.patch("repos", r._id, { laneEnvAllow });
+    return null;
+  },
+});
+
 export const repoConfig = internalQuery({
   args: { repo: v.string() },
   handler: async (ctx, { repo }) => {
@@ -117,6 +144,7 @@ export const repoConfig = internalQuery({
     return {
       setupFunctions: r.setupFunctions ?? (r.seedFunction ? [r.seedFunction] : []),
       deployArgs: r.deployArgs ?? [],
+      laneEnvAllow: r.laneEnvAllow ?? {},
     };
   },
 });
