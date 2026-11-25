@@ -66,7 +66,16 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 ### Admin panel
 
 `https://<lane-control>.convex.site/admin` is the product's home. Signed out, it explains lanes and
-offers GitHub sign-in; a fresh install with no admins shows the two-step bootstrap. Signed in as an
+offers GitHub sign-in.
+
+**Setup needs no terminal after the first deploy.** A fresh install (no admins) shows *Claim this
+install*: enter your GitHub username and paste a Convex team access token. Lane-control checks the
+token can manage its own deployment (it mints and deletes a key), then saves you as admin and the
+token as `CONVEX_TEAM_TOKEN`, and signs you in. *Connect GitHub* is one click: lane-control sends a
+GitHub App manifest, GitHub creates a private app (sign-in, plus push and pull request events to
+`/github/webhook`), and the redirect stores its keys. Install the app on your repos and you're done;
+no hand-made webhooks. The repo form lists your Convex projects. On a local backend (not Convex
+cloud) these fall back to `npx convex env set` / `npx convex run admin:createToken`. Signed in as an
 admin (a GitHub login in `LANE_ADMIN_GITHUB_USERS`), it has:
 
 - **Get started**: a checklist that ticks itself, live, from what lane-control has seen. Global steps
@@ -77,11 +86,9 @@ admin (a GitHub login in `LANE_ADMIN_GITHUB_USERS`), it has:
 - **Repos**: register repos, edit setup functions, deploy args, grace period, per-lane env allowlist,
   and write-only lane env.
 - **Tokens**: mint (shown once) and revoke machine tokens.
-- **Settings**: admins, allowed orgs/users, GitHub OAuth app and webhook secret (with Generate).
-  These are lane-control's own env vars; the panel writes them through the Convex API using
-  `CONVEX_TEAM_TOKEN`, which is the one value that must be set in the Convex dashboard. Without it
-  (or on a local backend) the tab is read-only and says where to change them. You can't remove
-  yourself as an admin.
+- **Settings**: admins, allowed orgs/users, the GitHub app or OAuth app, webhook secret (with
+  Generate), and the Convex team token. These are lane-control's own env vars; the panel writes
+  them through the Convex API with the team token. You can't remove yourself as an admin.
 - **Activity**: every GitHub webhook delivery and what happened to it (connected, refused and why,
   ignored, lane created or archived), plus sign-ins.
 - **Docs**: concepts, lifecycle, CLI, per-vendor agent setup, previews, security, FAQ.

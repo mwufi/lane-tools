@@ -50,6 +50,13 @@ export default defineSchema({
     at: v.number(),
   }),
 
+  // One-time setup state: who claimed this install, and pending GitHub App creations
+  // (the state value GitHub hands back on the redirect).
+  setup: defineTable({ kind: v.string(), value: v.string(), by: v.string(), at: v.number() }).index("by_kind_and_value", [
+    "kind",
+    "value",
+  ]),
+
   // Audit trail of GitHub sign-ins (who, CLI or web, when).
   logins: defineTable({ person: v.string(), via: v.string(), at: v.number() }),
 

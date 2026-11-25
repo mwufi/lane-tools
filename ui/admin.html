@@ -165,6 +165,10 @@
   .lanes-art .lbl { width: 150px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* overlays */
+  .claim { max-width: 560px; }
+  .field2 { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .field2 label { font-weight: 500; font-size: 13px; }
+  .bad-text { color: var(--bad); }
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.18); z-index: 20; max-width: min(560px, calc(100vw - 32px)); }
   .toast.err { background: var(--bad); color: #fff; }
   .scrim { position: fixed; inset: 0; background: rgba(10,10,12,.35); display:flex; align-items:center; justify-content:center; z-index: 30; padding: 16px; }
@@ -221,6 +225,9 @@ function token() {
 }
 let TOKEN = token();
 let TAB = (location.hash.match(/tab=(\w+)/) || [])[1] || "start";
+const NOTICE = (() => { const g = location.hash.match(/github=created/), e = location.hash.match(/error=([^&]+)/);
+  if (g || e) history.replaceState(null, "", location.pathname + "#tab=" + TAB);
+  return g ? { ok: true, msg: "GitHub app created. Next: install it on your repos." } : e ? { ok: false, msg: decodeURIComponent(e[1]) } : null; })();
 let DATA = null, LAST = "", NEWTOKEN = null, SECRET = null, PREFILL = null, FILTER = { q: "", state: "open" };
 const OPEN = new Set(); // which Get started steps the viewer opened or closed by hand
 const CLOSED = new Set();
@@ -270,17 +277,27 @@ async function signIn(msg) {
   let h = '<div class="landing">' + '<div class="row">' + LOGO + '<b style="font-size:15px">Lanes</b><span class="faint">' + esc(host) + '</span></div>' +
     '<h1>A real backend for every branch.</h1>' +
     '<p class="lede">Each branch gets its own seeded cloud deployment, shared by every person, agent and preview working on it. It appears when the branch starts and cleans itself up after the merge.</p>';
-  if (st.adminsConfigured === false) {
-    h += '<div class="card pad" style="margin-top:22px"><b>Set up this install</b><p class="sub">Lane-control is running, but has no admins yet. Two steps to the admin panel:</p>' +
-      '<ol style="padding-left:18px;margin:8px 0 0"><li>In the Convex dashboard for this deployment (lane-control), open <b>Settings, Environment Variables</b> and add <code>LANE_ADMIN_GITHUB_USERS</code> with your GitHub username.</li>' +
-      '<li>' + (st.githubSignIn ? 'Sign in with GitHub below, or mint yourself a token:' : 'Mint yourself a token (GitHub sign-in can be set up from the panel later):') +
-      snip("npx convex run admin:createToken " + "'" + JSON.stringify({ person: "<your GitHub username>" }) + "'") + '</li></ol></div>';
+  const claim = st.adminsConfigured === false && st.canClaim;
+  if (claim) {
+    h += '<div class="card claim" style="margin-top:24px"><div class="pad"><b style="font-size:15px">Claim this install</b>' +
+      '<p class="sub" style="margin-top:4px">Lanes is running here but has no admin yet. Become its admin in one step. No terminal, no dashboard settings.</p>' +
+      '<div class="field2"><label for="clogin">Your GitHub username</label><input id="clogin" placeholder="octocat" autocomplete="username"></div>' +
+      '<div class="field2"><label for="cteam">Convex team access token</label><input id="cteam" type="password" placeholder="Paste a token" autocomplete="off">' +
+      '<div class="help">In the <a href="https://dashboard.convex.dev" target="_blank" rel="noopener">Convex dashboard</a>, open the team that owns this deployment, then <b>Team settings, Access tokens</b>, and create one. ' +
+      'It proves you own this install, and Lanes uses it to create a deployment per branch. Use a team that doesn\'t run production.</div></div>' +
+      '<div class="row" style="margin-top:14px"><button id="claimgo">Claim and open Lanes</button><span id="claimmsg" class="sub"></span></div></div></div>';
+  } else if (st.adminsConfigured === false) {
+    h += '<div class="card pad" style="margin-top:22px"><b>Set up this install</b><p class="sub">This lane-control isn\'t on Convex cloud, so it can\'t be claimed from the browser. Mint yourself an admin token instead:</p>' +
+      snip("npx convex env set LANE_ADMIN_GITHUB_USERS <your GitHub username>\nnpx convex run admin:createToken " + "'" + JSON.stringify({ person: "<your GitHub username>" }) + "'") + '</div>';
   } else if (msg) {
     h += '<div class="note err" style="margin-top:22px">' + esc(msg) + '</div>';
   }
-  h += '<div class="cta">' + (cfg.webLogin ? '<a href="/auth/github/start?next=admin"><button>Sign in with GitHub</button></a>' : '') +
+  if (!claim) h += '<div class="cta">' + (cfg.webLogin ? '<a href="/auth/github/start?next=admin"><button>Sign in with GitHub</button></a>' : '') +
     '<button ' + (cfg.webLogin ? 'class="ghost" ' : '') + 'id="usetok">Use a lane token</button></div>' +
-    '<div id="tokrow" class="row" style="display:none;margin-top:8px"><input id="tok" type="password" placeholder="lane_…" style="width:340px;max-width:100%"><button id="go">Continue</button></div>' +
+    '<div id="tokrow" class="row" style="display:none;margin-top:8px"><input id="tok" type="password" placeholder="lane_…" style="width:340px;max-width:100%"><button id="go">Continue</button></div>';
+  if (claim) h += '<p class="faint" style="font-size:12.5px">Already have a lane token? <a href="#" id="usetok">Use it</a>.</p>' +
+    '<div id="tokrow" class="row" style="display:none;margin-top:8px"><input id="tok" type="password" placeholder="lane_…" style="width:340px;max-width:100%"><button id="go">Continue</button></div>';
+  h +=
     '<p class="faint" style="font-size:12.5px">The admin panel is for lane admins. Everyone else uses <a href="/">the lane list</a> and the <code>lane</code> CLI.</p>' +
     '<div class="lanes-art">' + art + '</div>' +
     '<div class="features">' +
@@ -289,7 +306,21 @@ async function signIn(msg) {
     '<div class="card"><b>Seeded and safe</b><p>Every lane runs your setup functions and gets short-lived keys scoped to that one deployment. Production is never touched.</p></div>' +
     '</div></div>';
   $("#app").innerHTML = h; wireSnips();
-  $("#usetok").onclick = () => { $("#tokrow").style.display = "flex"; $("#tok").focus(); };
+  if (claim) {
+    const go = async () => {
+      const b = $("#claimgo"), m = $("#claimmsg"); b.disabled = true; m.className = "sub"; m.textContent = "Checking the token…";
+      try {
+        const r = await api("/api/admin/claim", { login: $("#clogin").value.trim(), teamToken: $("#cteam").value.trim() });
+        TOKEN = r.token; try { localStorage.setItem("laneToken", TOKEN); } catch {}
+        m.textContent = "You're the admin. Opening Lanes…";
+        // New settings take a few seconds to reach every server.
+        for (let i = 0; i < 30; i++) { try { DATA = await api("/api/admin/overview"); LAST = ""; return load(true); } catch (e) { if (e.status !== 403 && e.status !== 401) throw e; } await new Promise((r) => setTimeout(r, 2000)); }
+        throw new Error("Claimed, but the new admin setting hasn't arrived yet. Reload in a minute.");
+      } catch (e) { m.className = "bad-text"; m.textContent = e.message; b.disabled = false; }
+    };
+    $("#claimgo").onclick = go; $("#cteam").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  }
+  $("#usetok").onclick = (e) => { e.preventDefault(); $("#tokrow").style.display = "flex"; $("#tok").focus(); };
   const go = () => { TOKEN = $("#tok").value.trim(); if (!TOKEN) return; try { localStorage.setItem("laneToken", TOKEN); } catch {} load(); };
   $("#go").onclick = go; $("#tok").onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
@@ -303,6 +334,7 @@ async function load(force) {
     const key = JSON.stringify(d);
     if (!force && key === LAST) return; // nothing changed: keep the page as it is
     LAST = key; DATA = d; render();
+    if (NOTICE && !NOTICE.shown) { NOTICE.shown = true; toast(NOTICE.msg, !NOTICE.ok); }
   } catch (e) {
     if (e.status === 401 || e.status === 403) return signIn(e.message);
     if (!DATA) $("#app").innerHTML = '<main><div class="note err">' + esc(e.message) + '</div><button class="ghost" onclick="location.reload()">Try again</button></main>';
@@ -365,15 +397,13 @@ function steps(d) {
     { id: "running", title: "Lane-control is running", done: true, detail: site.replace(/^https?:\/\//, "") + " · you're signed in as " + d.person },
     { id: "convex", title: "Connect Convex, where lanes are created",
       done: s.teamToken && (o.provisionedOnce || !o.failed), warn: s.teamToken && !o.provisionedOnce && !!o.failed,
-      detail: !s.teamToken ? "No team token yet" : o.provisionedOnce ? "Verified: lanes have been created with it" : o.failed ? "A lane failed to start on " + o.failed.where : "Token set. It's verified when the first lane starts.",
-      how: '<ol><li>In the Convex dashboard, pick the team lanes should live in. Use one that does <b>not</b> own production.</li>' +
-        '<li>Team settings, Access tokens: create a token.</li><li>In ' + DASH + ', set <code>CONVEX_TEAM_TOKEN</code> to it. (This one is set in the dashboard because it is what lets this panel change settings.)</li></ol>' +
+      detail: !s.teamToken ? "No team token yet" : o.provisionedOnce ? "Verified: lanes have been created with it" : o.failed ? "A lane failed to start on " + o.failed.where : "Connected. It's verified when the first lane starts.",
+      how: (s.teamToken ? '' : convexForm(s)) +
         (o.failed && o.failed.error ? '<p class="bad">Last failure: ' + esc(o.failed.error) + '</p>' + go("lanes", "Open failed lanes", null, true) : '') },
-    { id: "signin", title: "Let your team sign in with GitHub", optional: true,
-      done: s.githubSignIn && (s.allowedUsers.length + s.allowedOrgs.length > 0),
-      detail: !s.githubSignIn ? "Not set up. You can mint tokens instead." : (s.allowedOrgs.length + s.allowedUsers.length) ? "Open to " + [...s.allowedOrgs.map((x) => x + " (org)"), ...s.allowedUsers].join(", ") : "Set up, but nobody is allowed yet",
-      how: '<ol><li>On GitHub: Settings, Developer settings, <b>New OAuth App</b>. Homepage URL and callback URL:' + snip(site) + snip(site + "/auth/github/callback") + 'Tick <b>Enable Device Flow</b> (for <code>lane login</code>).</li>' +
-        '<li>Paste its client ID and a client secret, and say who may sign in (an org, or usernames). ' + setIn("GitHub sign-in") + '</li></ol>' },
+    { id: "github", title: "Connect GitHub",
+      done: !!s.githubApp || s.githubSignIn,
+      detail: s.githubApp ? "GitHub app " + s.githubApp.slug + " · sign-in open to " + whoCanSignIn(s) : s.githubSignIn ? "GitHub sign-in set up (OAuth app) · open to " + whoCanSignIn(s) : "One click: creates a GitHub app for sign-in and push events",
+      how: s.githubApp ? appHow(s) : githubConnect(s) },
   ]});
   if (!o.repos.length) {
     groups.push({ id: "repo", group: "Connect your first repo", items: [
@@ -426,10 +456,15 @@ function githubHow(d, r) {
   else if (s.editable) secretStep = '<button class="small" data-gensecret>Generate webhook secret</button>';
   else secretStep = 'A random secret, also set as <code>GITHUB_WEBHOOK_SECRET</code> in ' + DASH + '.';
   const last = r.lastDelivery;
-  return '<ol>' +
+  const status = last ? '<p>' + pill(last.ok ? "ok" : "bad", last.ok ? "Last delivery OK" : "Last delivery failed") + ' <span class="sub">' + esc(last.note) + ' · ' + ago(last.at) + '</span></p>' : '';
+  const hookStep = s.githubApp
+    ? '<li><b>Events</b>: <a href="https://github.com/apps/' + esc(s.githubApp.slug) + '/installations/new" target="_blank" rel="noopener">install the Lanes GitHub app on ' + esc(r.repo) + '</a>. Pushes and pull requests then reach Lanes on their own.' +
+      (status || '<p class="sub">Waiting for the first event from this repo.</p>') + '</li>'
+    : null;
+  return '<ol>' + (hookStep ||
     '<li><b>Webhook</b>, so pushes and merges reach lane-control. <a href="' + repoUrl + '/settings/hooks/new" target="_blank" rel="noopener">Add it on GitHub</a> with content type <code>application/json</code>, events <b>Pushes</b> and <b>Pull requests</b>, and payload URL:' + snip(site + "/github/webhook") + secretStep +
       (last ? '<p>' + pill(last.ok ? "ok" : "bad", last.ok ? "Last delivery OK" : "Last delivery failed") + ' <span class="sub">' + esc(last.note) + ' · ' + ago(last.at) + '</span></p>' :
-        '<p class="sub">Waiting for a delivery. GitHub sends a ping as soon as you save the webhook.</p>') + '</li>' +
+        '<p class="sub">Waiting for a delivery. GitHub sends a ping as soon as you save the webhook.</p>') + '</li>') +
     '<li><b>Deployer</b>, so each push redeploys its lane. Mint a token ' + go("tokens", "Mint github-actions token", "github-actions", true) + ' and add it on GitHub as the Actions secret <code>LANE_DEPLOYER_TOKEN</code>, with the variable <code>LANE_URL</code> =' + snip(site) + ' (<a href="' + repoUrl + '/settings/secrets/actions" target="_blank" rel="noopener">open Actions secrets</a>)</li>' +
     '<li>Commit these two files:' + snip(".lane.json\n" + JSON.stringify({ repo: r.repo, url: site }, null, 2)) + snip(DEPLOYER_YML) + '</li></ol>';
 }
@@ -456,6 +491,29 @@ const DEPLOYER_YML = ".github/workflows/lane-deployer.yml\n" + [
   "          LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}",
   "          LANE_DEPLOYER: github-actions",
 ].join("\n");
+
+function whoCanSignIn(s) {
+  const xs = [...s.allowedOrgs.map((x) => x + " (org)"), ...s.allowedUsers];
+  return xs.length ? xs.join(", ") : "nobody yet";
+}
+function convexForm(s) {
+  if (!s.onCloud) return '<p>This lane-control isn\'t on Convex cloud. Set <code>CONVEX_TEAM_TOKEN</code> with <code>npx convex env set</code>.</p>';
+  return '<p>Paste a Convex team access token. Create it in the <a href="https://dashboard.convex.dev" target="_blank" rel="noopener">Convex dashboard</a> under <b>Team settings, Access tokens</b>, in a team that doesn\'t run production.</p>' +
+    '<div class="row"><input id="convextok" type="password" placeholder="Team access token" style="flex:1;min-width:220px"><button data-convex>Connect Convex</button></div>';
+}
+function githubConnect(s) {
+  if (!s.editable) return '<p>Connect Convex first: creating the GitHub app stores its keys with the team token.</p>';
+  return '<p>Lanes creates a private GitHub app for you. It signs your team in with GitHub and sends pushes and pull requests here, so there are no webhooks to add by hand.</p>' +
+    '<div class="row"><input id="ghorg" placeholder="GitHub org (leave empty for your account)" style="flex:1;min-width:240px"><button data-ghapp>Create the GitHub app</button></div>' +
+    '<p class="help">GitHub asks you to confirm, then sends you back here. Create it under your org so its members can sign in.</p>';
+}
+function appHow(s) {
+  const slug = s.githubApp.slug, owner = s.githubApp.owner || "";
+  const settings = owner.startsWith("org:") ? "https://github.com/organizations/" + owner.slice(4) + "/settings/apps/" + slug : "https://github.com/settings/apps/" + slug;
+  return '<ol><li><a href="https://github.com/apps/' + esc(slug) + '/installations/new" target="_blank" rel="noopener">Install the app on your repos</a> so their pushes and pull requests reach Lanes.</li>' +
+    '<li>For <code>lane login</code> from a terminal, tick <b>Enable Device Flow</b> in the <a href="' + esc(settings) + '" target="_blank" rel="noopener">app\'s settings</a>.</li>' +
+    '<li>Who may sign in: ' + esc(whoCanSignIn(s)) + '. ' + go("settings", "Change", null, true) + '</li></ol>';
+}
 
 function progress(d) {
   const req = steps(d).flatMap((g) => g.items).filter((x) => !x.optional);
@@ -543,8 +601,8 @@ function tokenTable(rows, active) {
 // ---------------------------------------------------------------- Repos
 function reposTab(d) {
   let h = '<h1>Repos</h1><p class="lede">A registered repo gets a lane per branch, created as a dev deployment in its Convex project.</p>' +
-    '<div class="card pad"><b>Register a repo</b><div class="row" style="margin-top:8px"><input id="nrepo" placeholder="owner/name" style="flex:1;min-width:180px"><input id="nproj" placeholder="Convex project id" inputmode="numeric" style="width:170px"><button id="addrepo">Register</button></div>' +
-    '<p class="help">The project id is in the Convex dashboard under Project settings. Use a project in the team whose token lane-control holds.</p></div>';
+    '<div class="card pad"><b>Register a repo</b><div class="row" style="margin-top:8px"><input id="nrepo" placeholder="owner/name" style="flex:1;min-width:180px">' + projectPicker(d) + '<button id="addrepo">Register</button></div>' +
+    '<p class="help">' + (Array.isArray(PROJECTS) && PROJECTS.length ? 'Projects from the Convex team Lanes is connected to.' : 'The project id is in the Convex dashboard under Project settings, in the team Lanes is connected to.') + '</p></div>';
   const deliveries = d.onboarding.repos;
   for (const r of d.repos) {
     const facts = deliveries.find((x) => x.repo === r.repo) || {};
@@ -565,6 +623,18 @@ function reposTab(d) {
   }
   return h;
 }
+let PROJECTS = null; // Convex projects in the team, loaded once for the picker
+function projectPicker(d) {
+  if (PROJECTS === null && d.settings.teamToken) {
+    PROJECTS = "loading";
+    api("/api/admin/convex/projects").then((r) => { PROJECTS = r.projects; if (TAB === "repos") render(); }).catch(() => { PROJECTS = []; });
+  }
+  if (Array.isArray(PROJECTS) && PROJECTS.length) {
+    return '<select id="nproj" style="width:220px"><option value="">Convex project…</option>' +
+      PROJECTS.map((p) => '<option value="' + p.id + '">' + esc(p.name) + ' (' + p.id + ')</option>').join("") + '</select>';
+  }
+  return '<input id="nproj" placeholder="Convex project id" inputmode="numeric" style="width:170px">';
+}
 function field(label, hint, inner) { return '<div class="field"><label>' + esc(label) + (hint ? '<span class="sub">' + esc(hint) + '</span>' : '') + '</label><div>' + inner + '</div></div>'; }
 
 // ---------------------------------------------------------------- Settings
@@ -572,22 +642,23 @@ const SETTING_DEFS = [
   { name: "LANE_ADMIN_GITHUB_USERS", label: "Admins", hint: "Can use this panel", list: "admins", placeholder: "alice, bob" },
   { name: "LANE_ALLOWED_GITHUB_ORGS", label: "Allowed orgs", hint: "Members may sign in", list: "allowedOrgs", placeholder: "your-org" },
   { name: "LANE_ALLOWED_GITHUB_USERS", label: "Allowed users", hint: "May sign in", list: "allowedUsers", placeholder: "carol, dave" },
-  { name: "GITHUB_CLIENT_ID", label: "GitHub OAuth client ID", hint: "For sign-in", value: "clientIdValue", placeholder: "Ov23li…" },
-  { name: "GITHUB_CLIENT_SECRET", label: "GitHub OAuth client secret", hint: "Write-only", secret: "githubSignIn" },
+  { name: "GITHUB_CLIENT_ID", label: "OAuth client ID", hint: "Set by the app", value: "clientIdValue", placeholder: "Ov23li…" },
+  { name: "GITHUB_CLIENT_SECRET", label: "OAuth client secret", hint: "Write-only", secret: "githubSignIn" },
   { name: "GITHUB_WEBHOOK_SECRET", label: "Webhook secret", hint: "Signs GitHub deliveries", secret: "webhookSecret", generate: true },
 ];
 function settingsTab(d) {
   const s = d.settings;
   let h = '<h1>Settings</h1><p class="lede">Who can use lanes, and how lane-control talks to GitHub. Changes apply within a few seconds.</p>';
-  if (!s.editable) h += '<div class="note">Read-only here: lane-control can\'t change its own settings ' + (s.teamToken ? "outside Convex cloud" : "until <code>CONVEX_TEAM_TOKEN</code> is set") + '. Change them in ' + DASH + '.</div>';
+  if (!s.editable) h += '<div class="note">' + (s.onCloud ? 'Connect Convex below to edit these here.' : 'Read-only: this lane-control isn\'t on Convex cloud, so set these with <code>npx convex env set</code>.') + '</div>';
   h += '<h2>Access</h2><div class="card">';
   for (const f of SETTING_DEFS.slice(0, 3)) h += setting(f, s[f.list].join(", "), s.editable);
   h += '</div><h2>GitHub</h2><div class="card">';
+  h += field("GitHub app", "Sign-in and events", s.githubApp ? pill("on", s.githubApp.slug) + ' <a href="https://github.com/apps/' + esc(s.githubApp.slug) + '/installations/new" target="_blank" rel="noopener">Install on repos ↗</a>' + (s.editable ? '<div class="help">Create a new one to replace it: <a href="#" data-tab="start">Get started</a>.</div>' : '') : (s.editable ? githubConnect(s) : '<span class="sub">Not connected</span>'));
   for (const f of SETTING_DEFS.slice(3)) h += setting(f, f.value ? (s[f.value] || "") : null, s.editable, f.secret ? !!s[f.secret] : false);
   h += '</div>';
   if (SECRET) h += '<div class="note ok">New webhook secret, shown once. Paste it into each repo\'s webhook on GitHub.<div class="secret"><input readonly value="' + esc(SECRET) + '"><button class="ghost small" data-copyval="' + esc(SECRET) + '">Copy</button></div></div>';
   h += '<h2>Convex</h2><div class="card">' +
-    field("Team token", "Creates lanes", pill(s.teamToken ? "on" : "off", s.teamToken ? "set" : "missing") + '<div class="help">Set <code>CONVEX_TEAM_TOKEN</code> in ' + DASH + '. It stays there: it is what lets this page change the settings above.</div>') +
+    field("Team token", "Creates lanes", pill(s.teamToken ? "on" : "off", s.teamToken ? "connected" : "missing") + (s.onCloud ? '<div style="margin-top:8px">' + convexForm(s).replace("Connect Convex", s.teamToken ? "Replace token" : "Connect Convex") + '</div>' : '')) +
     field("Deployment", "This lane-control", '<span class="mono">' + esc(s.deployment || "local or unknown") + '</span>' + (s.deployment ? ' <a href="https://dashboard.convex.dev/d/' + esc(s.deployment) + '/settings/environment-variables" target="_blank" rel="noopener">Open in Convex ↗</a>' : '')) +
     '</div>';
   return h;
@@ -620,11 +691,18 @@ function activityTab(d) {
 // ---------------------------------------------------------------- Docs
 function docsTab(d) {
   const site = d.settings.siteUrl || location.origin;
-  const sec = [["concepts", "Concepts"], ["lifecycle", "Lifecycle"], ["cli", "CLI"], ["agents", "Agents"], ["previews", "Previews"], ["security", "Security"], ["faq", "FAQ"]];
+  const sec = [["setup", "Setup"], ["concepts", "Concepts"], ["lifecycle", "Lifecycle"], ["cli", "CLI"], ["agents", "Agents"], ["previews", "Previews"], ["security", "Security"], ["faq", "FAQ"]];
   const cmd = (c, t) => '<tr><td><code>' + esc(c) + '</code></td><td class="sub">' + t + '</td></tr>';
   const vendor = (name, where) => '<tr><td><b>' + name + '</b></td><td class="sub">' + where + '</td></tr>';
   return '<h1>Docs</h1><p class="lede">How lanes work, and how to put people, agents and previews on them.</p><div class="docs"><nav class="toc">' +
     sec.map(([k, l]) => '<a href="#" data-doc="' + k + '">' + l + '</a>').join("") + '</nav><article>' +
+    '<h2 id="doc-setup">Setup</h2>' +
+    '<p>Everything after the first deploy happens on this site. No terminal, no dashboard settings:</p><ol>' +
+    '<li><b>Claim the install.</b> The first visit asks for your GitHub username and a Convex team access token. The token proves you own lane-control, and Lanes uses it to create a deployment per branch.</li>' +
+    '<li><b>Connect GitHub.</b> One click creates a private GitHub app: sign-in for your team, plus push and pull request events. Install it on your repos.</li>' +
+    '<li><b>Register a repo</b> and pick its Convex project. Add setup functions so every lane starts seeded.</li>' +
+    '<li><b>Add the deployer</b> to the repo: a token from the Tokens tab as an Actions secret, plus two small files Get started shows you.</li></ol>' +
+    '<p>Admins, who may sign in, and the GitHub and Convex connections can all be changed later under Settings.</p>' +
     '<h2 id="doc-concepts">Concepts</h2>' +
     '<p>A <b>lane</b> is one cloud backend for one branch: a Convex dev deployment in the repo\'s project, seeded by its setup functions. Everyone on the branch (you, your agents, CI and the preview build) uses the same lane, so data and schema stay consistent across them.</p>' +
     '<ul><li><b>Lane-control</b> (this app) creates lanes, holds the Convex team token, and hands out short-lived keys scoped to one lane.</li>' +
@@ -710,6 +788,13 @@ function wire() {
     if (DATA.settings.webhookSecret && !(await ask("Replace the webhook secret?", "Webhooks using the old secret are refused until you paste the new one into them on GitHub.", "Generate new secret", true))) return;
     act(b, async () => { const r = await api("/api/admin/settings", { name: "GITHUB_WEBHOOK_SECRET", generate: true }); SECRET = r.generated; return r; }, "New webhook secret generated. Copy it into GitHub.");
   });
+  on("[data-convex]", (b) => act(b, () => api("/api/admin/convex/connect", { teamToken: $("#convextok").value.trim() }), "Convex connected. Lanes can now create deployments."));
+  on("[data-ghapp]", (b) => act(b, async () => {
+    const r = await api("/api/admin/github/manifest", { org: ($("#ghorg") || {}).value || "" });
+    const f = document.createElement("form"); f.method = "post"; f.action = r.action;
+    const i = document.createElement("input"); i.type = "hidden"; i.name = "manifest"; i.value = r.manifest; f.appendChild(i);
+    document.body.appendChild(f); f.submit();
+  }));
   on("[data-lf]", (b) => { FILTER.state = b.dataset.lf; render(); });
   const lq = $("#lq"); if (lq) lq.oninput = () => { FILTER.q = lq.value; const pos = lq.selectionStart; render(); const n = $("#lq"); n.focus(); n.setSelectionRange(pos, pos); };
   on("[data-doc]", (a) => document.getElementById("doc-" + a.dataset.doc)?.scrollIntoView({ behavior: "smooth" }));
