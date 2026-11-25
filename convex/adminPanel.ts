@@ -181,7 +181,10 @@ export const onboarding = internalQuery({
     );
     const machineNames = new Set(["github", "github-actions", ...machineTokens.map((t) => t.person)]);
     const isMachine = (actor: string) => machineNames.has(actor) || actor.startsWith("github/");
-    const pushes = events.filter((e) => e.type === "push");
+    // A push, or a lane the GitHub Action created or deployed (holders look like "github-actions#123").
+    const pushes = events.filter(
+      (e) => e.type === "push" || ((e.type === "provisioning" || e.type === "deploy_start") && isMachine(e.actor.split("#")[0])),
+    );
     const githubPush = pushes.find((e) => isMachine(e.actor));
     const deliveries = await ctx.db.query("webhookDeliveries").order("desc").take(200);
     const goodDelivery = deliveries.find((d) => d.ok);

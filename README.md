@@ -33,7 +33,7 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 | `convex/http.ts` | JSON API for the CLI, `/github/webhook` (HMAC-verified: PR opened -> ensure, push -> record HEAD, PR closed / branch deleted -> archive), and the lane page at `/` and `/lane`. |
 | `convex/provision.ts` | The Convex resource type: create a dev deployment, set env, mint scoped keys, revoke, delete. |
 | `cli/lane.mjs` | Zero-dependency Node CLI. Detects vendor/thread from env (`CLAUDECODE`, `CODEX_*`, `CURSOR_*`, `AMP_*`, `AI_AGENT`), overridable with `LANE_VENDOR`, `LANE_THREAD_URL`, `LANE_MACHINE`, `LANE_PERSON`. |
-| `templates/lane-deployer.yml` | GitHub Action that runs `lane deploy` on pushes. |
+| `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, archives on PR close or branch delete. |
 | `examples/pingpal/` | "Message your friends" sample app used by the demo. |
 | `demo/` | `setup-remote.sh` (a bare git repo + post-receive hook standing in for GitHub), `e2e.sh`, `screenshot.mjs`. |
 
@@ -81,7 +81,7 @@ offers GitHub sign-in.
    different Convex teams. Paste a new token for the same team to rotate it; a team still used by a
    repo can't be removed. `CONVEX_TEAM_TOKEN`, if set, is the default for repos with no team.
 
-*Connect GitHub* is one click: lane-control sends a GitHub App manifest, GitHub creates a private
+*Connect GitHub* is optional: lanes run without it through the GitHub Action in `templates/lanes.yml`, and agents can use minted tokens instead of `lane login`. It adds GitHub sign-in (this panel and `lane login`, which also needs *Enable Device Flow* ticked in the app's settings) and push events. It is one click: lane-control sends a GitHub App manifest, GitHub creates a private
 app (sign-in, plus push and pull request events to `/github/webhook`), and the redirect stores its
 keys. Install the app on your repos and you're done; no hand-made webhooks. The repo form picks a
 Convex team, then lists that team's projects. On a local backend (not Convex cloud) settings fall

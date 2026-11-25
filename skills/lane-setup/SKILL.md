@@ -20,9 +20,9 @@ Fix whatever it marks FAIL, in this order:
 
 | FAIL line | Fix |
 |---|---|
-| `lane: command not found` | `npm install -g github:mwufi/lane-tools` (needs Node 20+) |
+| `lane: command not found` | `npm install -g github:mwufi/lane-tools` (needs Node 22+) |
 | control plane unset | Ask the person for their lane-control URL (`https://<name>.convex.site`), then `lane init --url <url>` |
-| token missing / rejected | On a laptop: run `lane login` and have the person approve the GitHub code it shows. Otherwise the person provides it. **Never ask them to paste a token into chat and never print one.** Ask them to set `LANE_TOKEN` in their shell profile or their agent environment's secrets, or to run `lane init --url <url> --token-stdin < token-file` themselves. |
+| token missing / rejected | On a laptop: run `lane login` and have the person approve the GitHub code it shows (if GitHub refuses it, Device Flow is off on the Lanes GitHub app; the error names the settings page). Without GitHub sign-in, a lane-control admin mints a token in the admin panel's Tokens tab. Otherwise the person provides it. **Never ask them to paste a token into chat and never print one.** Ask them to set `LANE_TOKEN` in their shell profile or their agent environment's secrets, or to run `lane init --url <url> --token-stdin < token-file` themselves. |
 | can't reach the URL | The environment's network policy must allow `*.convex.site`, `*.convex.cloud` and `api.convex.dev`. Tell the person; don't try to work around it. |
 | repo is NOT registered | A lane-control admin registers it once (`npx convex run admin:registerRepo ...`, see the lane-tools README). Tell the person; it is not something an agent should do on its own. |
 

@@ -321,7 +321,8 @@ async function login() {
   const url = (typeof args.url === "string" ? args.url : LANE_URL).replace(/\/$/, "");
   if (!url) die("pass --url https://<your lane-control>.convex.site the first time");
   const cfg = await (await fetch(url + "/api/auth/config")).json();
-  if (!cfg.githubClientId) die("GitHub login isn't set up on this lane-control yet (GITHUB_CLIENT_ID is unset)");
+  const tokenPath = `or skip GitHub: an admin mints a token at ${url}/admin (Tokens), then set LANE_URL=${url} and LANE_TOKEN (or run lane init --url ${url} --token-stdin < token-file)`;
+  if (!cfg.githubClientId) die(`GitHub login isn't set up on this lane-control yet; ${tokenPath}`);
   const form = (o) => new URLSearchParams(o).toString();
   const gh = async (p, body) => {
     const r = await fetch("https://github.com" + p, {
@@ -332,7 +333,8 @@ async function login() {
     return await r.json();
   };
   const dc = await gh("/login/device/code", { client_id: cfg.githubClientId, scope: "read:org" });
-  if (!dc.device_code) die("GitHub refused the login request: " + (dc.error_description || dc.error || "unknown error") + " (is Device Flow enabled on the OAuth app?)");
+  if (!dc.device_code) die("GitHub refused the login request: " + (dc.error_description || dc.error || "unknown error") + ".\n" +
+    (cfg.githubAppSettings ? `An admin can tick "Enable Device Flow" at ${cfg.githubAppSettings}, ` : "An admin can enable Device Flow on the GitHub app, ") + tokenPath);
   console.error(`\nOpen ${dc.verification_uri} and enter this code:\n\n    ${dc.user_code}\n`);
   if (!args["no-browser"]) {
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
@@ -397,7 +399,7 @@ async function doctor(over = {}) {
     ok &&= good;
     return good;
   };
-  check(Number(process.versions.node.split(".")[0]) >= 20, `node ${process.versions.node}`, "install Node 20 or newer");
+  check(Number(process.versions.node.split(".")[0]) >= 22, `node ${process.versions.node}`, "install Node 22 or newer");
   if (!check(!!url, `control plane ${url || "(unset)"}`, "lane init --url https://<lane-control>.convex.site")) return process.exit(1);
   if (!check(!!token, "token present", "set LANE_TOKEN, or: lane init --token-stdin < token-file")) return process.exit(1);
   let who = null;
