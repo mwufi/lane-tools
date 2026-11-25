@@ -28,6 +28,7 @@ export default defineSchema({
     // Per-lane env vars callers may set with POST /api/lane/env: name -> value regex
     // (full match), e.g. {"SITE_URL": "https://app-git-[a-z0-9-]+\\.vercel\\.app"}.
     laneEnvAllow: v.optional(v.record(v.string(), v.string())),
+    convexTeamId: v.optional(v.id("convexTeams")), // whose token creates its lanes (unset: CONVEX_TEAM_TOKEN)
   }).index("by_repo", ["repo"]),
 
   // Agent/person tokens. Only the SHA-256 hash is stored.
@@ -47,6 +48,16 @@ export default defineSchema({
     repo: v.optional(v.string()),
     ok: v.boolean(),
     note: v.string(),
+    at: v.number(),
+  }),
+
+  // Convex teams lanes can be created in. Each holds that team's access token (never sent to
+  // browsers); repos point at one. Separate from claiming lane-control, and rotatable.
+  convexTeams: defineTable({
+    label: v.string(),
+    teamId: v.number(),
+    token: v.string(),
+    addedBy: v.string(),
     at: v.number(),
   }),
 

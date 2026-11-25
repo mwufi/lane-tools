@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import {
   AGENT_ACTIONS,
@@ -9,7 +9,7 @@ import {
   deleteDeployKey,
   deleteDeployment,
   setDeploymentEnv,
-  listProjects,
+  inspectTeamToken,
   siteUrlFor,
 } from "./lib/mgmt";
 
@@ -30,6 +30,12 @@ export function allowedLaneEnv(
   return out;
 }
 
+// Each repo creates lanes with the token of the Convex team it's connected to (Settings, Convex).
+// Repos registered before connections existed fall back to CONVEX_TEAM_TOKEN.
+async function repoToken(ctx: ActionCtx, repo: string): Promise<string | undefined> {
+  return (await ctx.runQuery(internal.adminPanel.tokenForRepo, { repo })) ?? undefined;
+}
+
 /** Convex resource type, `ensure`: create a dev deployment and set the lane env. */
 export const provision = internalAction({
   args: { laneId: v.id("lanes") },
@@ -40,8 +46,9 @@ export const provision = internalAction({
     if (!data || !data.repoCfg || data.lane.state !== "provisioning") return null;
     const { lane, repoCfg } = data;
     try {
+      const token = await repoToken(ctx, lane.repo);
       const reference = `lane-${slug(lane.branch)}-${Date.now().toString(36)}`;
-      const dep = await createDeployment(repoCfg.convexProjectId, reference);
+      const dep = await createDeployment(repoCfg.convexProjectId, reference, token);
       const env = {
         ...repoCfg.env,
         ...allowedLaneEnv(lane.env ?? {}, repoCfg.laneEnvAllow ?? {}),
@@ -55,9 +62,10 @@ export const provision = internalAction({
         setupKeyName,
         ["deployment:env:write", "deployment:env:view"],
         0,
+        token,
       );
       await setDeploymentEnv(dep.deploymentUrl, setupKey, env);
-      await deleteDeployKey(dep.name, setupKeyName);
+      await deleteDeployKey(dep.name, setupKeyName, token);
       await ctx.runMutation(internal.lanes.markProvisioned, {
         laneId,
         deploymentName: dep.name,
@@ -81,10 +89,11 @@ export const setLaneEnv = internalAction({
     deploymentName: v.string(),
     deploymentUrl: v.string(),
     vars: v.record(v.string(), v.union(v.string(), v.null())), // null removes
-    teamToken: v.optional(v.string()), // write with this token instead of CONVEX_TEAM_TOKEN
+    repo: v.string(), // whose Convex team token to use
   },
   returns: v.null(),
-  handler: async (_ctx, { deploymentName, deploymentUrl, vars, teamToken }) => {
+  handler: async (ctx, { deploymentName, deploymentUrl, vars, repo }) => {
+    const teamToken = await repoToken(ctx, repo);
     const keyName = `lane-env-${Date.now().toString(36)}`;
     const key = await createDeployKey(deploymentName, keyName, ["deployment:env:write", "deployment:env:view"], 0, teamToken);
     try {
@@ -106,6 +115,8 @@ export const mintKey = internalAction({
   },
   returns: v.object({ key: v.string(), expiresAt: v.number(), name: v.string() }),
   handler: async (ctx, args) => {
+    const info = await ctx.runQuery(internal.lanes.getForProvision, { laneId: args.laneId });
+    const token = info ? await repoToken(ctx, info.lane.repo) : undefined;
     const ttlMs = args.purpose === "deployer" ? 31 * 60_000 : 4 * 60 * 60_000;
     const name = `${args.purpose}-${slug(args.holder)}-${Date.now().toString(36)}`;
     const key = await createDeployKey(
@@ -113,6 +124,7 @@ export const mintKey = internalAction({
       name,
       args.purpose === "deployer" ? DEPLOYER_ACTIONS : AGENT_ACTIONS,
       ttlMs,
+      token,
     );
     const expiresAt = Date.now() + ttlMs;
     await ctx.runMutation(internal.lanes.recordKey, {
@@ -132,10 +144,12 @@ export const revokeKeys = internalAction({
   handler: async (ctx, { laneId }) => {
     const { deploymentName, keys } = await ctx.runQuery(internal.lanes.keysToRevoke, { laneId });
     if (!deploymentName) return null;
+    const info = await ctx.runQuery(internal.lanes.getForProvision, { laneId });
+    const token = info ? await repoToken(ctx, info.lane.repo) : undefined;
     const done = [];
     for (const k of keys) {
       try {
-        await deleteDeployKey(deploymentName, k.name);
+        await deleteDeployKey(deploymentName, k.name, token);
       } catch {
         // Already expired or deleted; either way it no longer works.
       }
@@ -155,33 +169,30 @@ export const teardown = internalAction({
     // Reopened during the grace period, or already gone.
     if (!info || info.lane.state !== "archived" || !info.lane.deploymentName) return null;
     const started = Date.now();
-    await deleteDeployment(info.lane.deploymentName);
+    await deleteDeployment(info.lane.deploymentName, await repoToken(ctx, info.lane.repo));
     await ctx.runMutation(internal.lanes.markDeleted, { laneId, tookMs: Date.now() - started });
     return null;
   },
 });
 
-/** Convex projects in the team of CONVEX_TEAM_TOKEN (the repo form's picker). */
-export const projects = internalAction({
-  args: {},
-  returns: v.array(v.object({ id: v.number(), name: v.string(), slug: v.string() })),
-  handler: async () => (await listProjects()).map((p) => ({ id: p.id, name: p.name, slug: p.slug })),
+/** Check a pasted team token: which team it belongs to and that team's projects. */
+export const inspectToken = internalAction({
+  args: { token: v.string() },
+  returns: v.object({ teamId: v.number(), projects: v.array(v.object({ id: v.number(), name: v.string(), slug: v.string() })) }),
+  handler: async (_ctx, { token }) => {
+    const r = await inspectTeamToken(token);
+    return { teamId: r.teamId, projects: r.projects.map((p) => ({ id: p.id, name: p.name, slug: p.slug })) };
+  },
 });
 
-/** Whether a team token can manage a deployment: it can mint (then deletes) a key for it. */
-export const canManage = internalAction({
-  args: { deploymentName: v.string(), teamToken: v.string() },
-  returns: v.boolean(),
-  handler: async (_ctx, { deploymentName, teamToken }) => {
-    const keyName = `lane-claim-${Date.now().toString(36)}`;
-    try {
-      await createDeployKey(deploymentName, keyName, ["deployment:env:view"], 0, teamToken);
-    } catch (e) {
-      // The Management API refuses (401/403/404) a token without access; anything else is a real error.
-      if (/-> (400|401|403|404):/.test(e instanceof Error ? e.message : "")) return false;
-      throw e;
-    }
-    await deleteDeployKey(deploymentName, keyName, teamToken).catch(() => {});
-    return true;
+/** Projects in a connected Convex team (or the legacy CONVEX_TEAM_TOKEN's team), for the repo form. */
+export const projects = internalAction({
+  args: { teamId: v.optional(v.id("convexTeams")) },
+  returns: v.array(v.object({ id: v.number(), name: v.string(), slug: v.string() })),
+  handler: async (ctx, { teamId }) => {
+    const token = teamId ? await ctx.runQuery(internal.adminPanel.convexTeamToken, { id: teamId }) : undefined;
+    if (teamId && !token) throw new Error("That Convex team isn't connected");
+    const r = await inspectTeamToken(token ?? undefined);
+    return r.projects.map((p) => ({ id: p.id, name: p.name, slug: p.slug }));
   },
 });

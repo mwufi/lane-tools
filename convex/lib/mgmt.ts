@@ -28,16 +28,16 @@ async function call<T>(method: string, path: string, body?: unknown, token?: str
 
 export type Deployment = { name: string; deploymentUrl: string; reference: string };
 
-export async function createDeployment(projectId: number, reference: string): Promise<Deployment> {
+export async function createDeployment(projectId: number, reference: string, token?: string): Promise<Deployment> {
   // "dev" deployments have no expiry; lanes are deleted on merge instead.
   return await call<Deployment>("POST", `/projects/${projectId}/create_deployment`, {
     type: "dev",
     reference,
-  });
+  }, token);
 }
 
-export async function deleteDeployment(name: string): Promise<void> {
-  await call("POST", `/deployments/${name}/delete`);
+export async function deleteDeployment(name: string, token?: string): Promise<void> {
+  await call("POST", `/deployments/${name}/delete`, undefined, token);
 }
 
 export const DEPLOYER_ACTIONS = [
@@ -75,10 +75,19 @@ export async function deleteDeployKey(deploymentName: string, name: string, toke
   await call("POST", `/deployments/${deploymentName}/delete_deploy_key`, { id: name }, token);
 }
 
-/** The Convex projects in the team that owns the team token. */
-export async function listProjects(): Promise<Array<{ id: number; name: string; slug: string }>> {
-  const t = await call<{ teamId: number }>("GET", "/token_details");
-  return await call("GET", `/teams/${t.teamId}/list_projects`);
+/** The team a token belongs to, and that team's projects. */
+export async function inspectTeamToken(
+  token?: string,
+): Promise<{ teamId: number; projects: Array<{ id: number; name: string; slug: string }> }> {
+  const t = await call<{ teamId: number }>("GET", "/token_details", undefined, token);
+  const projects = await call<Array<{ id: number; name: string; slug: string }>>("GET", `/teams/${t.teamId}/list_projects`, undefined, token);
+  return { teamId: t.teamId, projects };
+}
+
+/** Whether an admin or deploy key works on a deployment (a read-only call). */
+export async function keyWorks(deploymentUrl: string, key: string): Promise<boolean> {
+  const res = await fetch(`${deploymentUrl}/api/v1/list_environment_variables`, { headers: { Authorization: `Convex ${key}` } });
+  return res.ok;
 }
 
 export async function setDeploymentEnv(
