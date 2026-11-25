@@ -245,6 +245,13 @@ function strList(b: Record<string, unknown>, k: string): string[] | undefined {
   return val as string[];
 }
 
+// Public: tells the sign-in screen whether this install has any admins yet (first-run setup).
+route("/api/admin/status", "GET", async () => ({
+  adminsConfigured: admins().length > 0,
+  githubSignIn: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+  siteUrl: process.env.CONVEX_SITE_URL ?? null,
+}));
+
 route("/api/admin/me", "GET", async (ctx, req) => {
   const person = await authed(ctx, req);
   return { person, admin: admins().includes(person.toLowerCase()) };
@@ -252,11 +259,12 @@ route("/api/admin/me", "GET", async (ctx, req) => {
 
 route("/api/admin/overview", "GET", async (ctx, req) => {
   const person = await admin(ctx, req);
-  const [tokens, repos, lanes, signIns] = await Promise.all([
+  const [tokens, repos, lanes, signIns, onboarding] = await Promise.all([
     ctx.runQuery(internal.adminPanel.tokens, {}),
     ctx.runQuery(internal.adminPanel.repos, {}),
     ctx.runQuery(internal.lanes.list, { now: Date.now() }),
     ctx.runQuery(internal.adminPanel.signIns, {}),
+    ctx.runQuery(internal.adminPanel.onboarding, {}),
   ]);
   return {
     person,
@@ -264,6 +272,7 @@ route("/api/admin/overview", "GET", async (ctx, req) => {
     repos,
     lanes,
     signIns,
+    onboarding,
     // Deployment env vars can only be changed in the Convex dashboard; shown here read-only.
     settings: {
       admins: admins(),

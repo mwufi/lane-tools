@@ -152,3 +152,52 @@ export const signIns = internalQuery({
   handler: async (ctx) =>
     (await ctx.db.query("logins").order("desc").take(50)).map((l) => ({ person: l.person, via: l.via, at: l.at })),
 });
+
+/**
+ * Facts behind the Get started checklist, read from the control plane's own tables so
+ * every step checks itself: nothing is ticked by hand.
+ */
+export const onboarding = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const repos = await ctx.db.query("repos").take(200);
+    const tokens = await ctx.db.query("tokens").take(500);
+    const lanes = await ctx.db.query("lanes").order("desc").take(500);
+    const agents = await ctx.db.query("laneAgents").order("desc").take(1);
+    const events = await ctx.db.query("laneEvents").order("desc").take(3000);
+    const logins = await ctx.db.query("logins").order("desc").take(1);
+
+    // Tokens made for machines (CI, Vercel, agent envs), not by someone signing in with GitHub.
+    const machineTokens = tokens.filter((t) => !t.revoked && !(t.createdBy ?? "").startsWith("github:"));
+    const machineNames = new Set(["github", "github-actions", ...machineTokens.map((t) => t.person)]);
+    const pushes = events.filter((e) => e.type === "push");
+    const githubPush = pushes.find((e) => machineNames.has(e.actor));
+    const live = lanes.filter((l) => l.deployedSha);
+    const failed = lanes.find((l) => l.state === "failed");
+    const archived = events.find((e) => e.type === "archived");
+    const envSet = events.find((e) => e.type === "env");
+    const laneById = new Map(lanes.map((l) => [l._id, l]));
+    const where = (laneId: string | undefined) => {
+      const l = laneId ? laneById.get(laneId as never) : undefined;
+      return l ? `${l.repo} · ${l.branch}` : null;
+    };
+    return {
+      repos: repos.map((r) => ({
+        repo: r.repo,
+        convexProjectId: r.convexProjectId,
+        setup: (r.setupFunctions ?? (r.seedFunction ? [r.seedFunction] : [])).length,
+        laneEnvAllow: Object.keys(r.laneEnvAllow ?? {}).length,
+      })),
+      machineTokens: machineTokens.map((t) => t.person),
+      firstSignIn: logins[0] ? logins[0].person : null,
+      githubPush: githubPush ? { actor: githubPush.actor, at: githubPush.at, where: where(githubPush.laneId) } : null,
+      anyPush: pushes.length > 0,
+      firstLive: live.length ? { where: `${live[live.length - 1].repo} · ${live[live.length - 1].branch}`, count: live.length } : null,
+      provisionedOnce: lanes.some((l) => l.readyAt !== undefined),
+      failed: failed ? { where: `${failed.repo} · ${failed.branch}`, error: (failed.error ?? "").slice(0, 300) } : null,
+      agentJoined: agents.length > 0 ? { vendor: agents[0].vendor, at: agents[0].joinedAt } : null,
+      archived: archived ? { where: where(archived.laneId), at: archived.at, detail: archived.detail } : null,
+      envSet: envSet ? { where: where(envSet.laneId) } : null,
+    };
+  },
+});
