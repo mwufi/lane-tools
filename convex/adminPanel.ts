@@ -63,6 +63,7 @@ export const repos = internalQuery({
         deployArgs: r.deployArgs ?? [],
         envNames: Object.keys(r.env).sort(),
         laneEnvAllow: r.laneEnvAllow ?? {},
+        convexTeamId: r.convexTeamId ?? null,
         graceMs: r.graceMs,
         openLanes: lanes.filter((l) => l.state !== "deleted" && l.state !== "archived").length,
       });
@@ -72,9 +73,10 @@ export const repos = internalQuery({
 });
 
 export const addRepo = internalMutation({
-  args: { repo: v.string(), convexProjectId: v.number() },
+  args: { repo: v.string(), convexProjectId: v.number(), convexTeamId: v.optional(v.id("convexTeams")) },
   returns: v.null(),
-  handler: async (ctx, { repo, convexProjectId }) => {
+  handler: async (ctx, { repo, convexProjectId, convexTeamId }) => {
+    if (convexTeamId && !(await ctx.db.get("convexTeams", convexTeamId))) throw new Error("That Convex team isn't connected");
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error("repo must look like owner/name");
     if (!(Number.isInteger(convexProjectId) && convexProjectId > 0)) throw new Error("Convex project id must be a positive number");
     const existing = await ctx.db
@@ -89,6 +91,7 @@ export const addRepo = internalMutation({
       deployArgs: [],
       env: {},
       graceMs: 3 * 24 * 60 * 60_000,
+      convexTeamId,
     });
     return null;
   },
@@ -103,9 +106,11 @@ export const updateRepo = internalMutation({
     deployArgs: v.optional(v.array(v.string())),
     graceMs: v.optional(v.number()),
     laneEnvAllow: v.optional(v.record(v.string(), v.string())),
+    convexTeamId: v.optional(v.union(v.id("convexTeams"), v.null())), // null: back to the default
   },
   returns: v.null(),
-  handler: async (ctx, { repo, ...patch }) => {
+  handler: async (ctx, { repo, convexTeamId, ...patch }) => {
+    if (convexTeamId && !(await ctx.db.get("convexTeams", convexTeamId))) throw new Error("That Convex team isn't connected");
     const r = await ctx.db
       .query("repos")
       .withIndex("by_repo", (q) => q.eq("repo", repo))
@@ -122,6 +127,7 @@ export const updateRepo = internalMutation({
     const clean = Object.fromEntries(Object.entries(patch).filter(([, x]) => x !== undefined));
     if (clean.setupFunctions) await ctx.db.patch("repos", r._id, { seedFunction: undefined });
     await ctx.db.patch("repos", r._id, clean);
+    if (convexTeamId !== undefined) await ctx.db.patch("repos", r._id, { convexTeamId: convexTeamId ?? undefined });
     return null;
   },
 });
@@ -306,5 +312,69 @@ export const finishGithubApp = internalMutation({
     if (!row) return null;
     await ctx.db.delete("setup", row._id);
     return Date.now() - row.at < 60 * 60_000 ? row.by : null;
+  },
+});
+
+// ---------------------------------------------------------------- Convex teams
+// Where lanes are created. Tokens stay server-side: queries below return everything but the token.
+
+export const convexTeams = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const teams = await ctx.db.query("convexTeams").take(50);
+    const repos = await ctx.db.query("repos").take(200);
+    return teams.map((t) => ({
+      id: t._id,
+      label: t.label,
+      teamId: t.teamId,
+      addedBy: t.addedBy,
+      at: t.at,
+      repos: repos.filter((r) => r.convexTeamId === t._id).map((r) => r.repo),
+    }));
+  },
+});
+
+export const addConvexTeam = internalMutation({
+  args: { label: v.string(), teamId: v.number(), token: v.string(), by: v.string() },
+  returns: v.id("convexTeams"),
+  handler: async (ctx, args) => {
+    // One connection per team: adding the same team again replaces its token.
+    const same = (await ctx.db.query("convexTeams").take(50)).find((t) => t.teamId === args.teamId);
+    if (same) {
+      await ctx.db.patch("convexTeams", same._id, { token: args.token, label: args.label || same.label, addedBy: args.by, at: Date.now() });
+      return same._id;
+    }
+    return await ctx.db.insert("convexTeams", { label: args.label, teamId: args.teamId, token: args.token, addedBy: args.by, at: Date.now() });
+  },
+});
+
+export const removeConvexTeam = internalMutation({
+  args: { id: v.id("convexTeams") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const users = (await ctx.db.query("repos").take(200)).filter((r) => r.convexTeamId === id).map((r) => r.repo);
+    if (users.length) throw new Error(`Still used by ${users.join(", ")}. Move those repos to another team first.`);
+    await ctx.db.delete("convexTeams", id);
+    return null;
+  },
+});
+
+export const convexTeamToken = internalQuery({
+  args: { id: v.id("convexTeams") },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { id }) => (await ctx.db.get("convexTeams", id))?.token ?? null,
+});
+
+/** The token that creates a repo's lanes: its Convex team's, else null (CONVEX_TEAM_TOKEN). */
+export const tokenForRepo = internalQuery({
+  args: { repo: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { repo }) => {
+    const r = await ctx.db
+      .query("repos")
+      .withIndex("by_repo", (q) => q.eq("repo", repo))
+      .unique();
+    if (!r?.convexTeamId) return null;
+    return (await ctx.db.get("convexTeams", r.convexTeamId))?.token ?? null;
   },
 });

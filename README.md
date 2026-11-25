@@ -68,14 +68,24 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 `https://<lane-control>.convex.site/admin` is the product's home. Signed out, it explains lanes and
 offers GitHub sign-in.
 
-**Setup needs no terminal after the first deploy.** A fresh install (no admins) shows *Claim this
-install*: enter your GitHub username and paste a Convex team access token. Lane-control checks the
-token can manage its own deployment (it mints and deletes a key), then saves you as admin and the
-token as `CONVEX_TEAM_TOKEN`, and signs you in. *Connect GitHub* is one click: lane-control sends a
-GitHub App manifest, GitHub creates a private app (sign-in, plus push and pull request events to
-`/github/webhook`), and the redirect stores its keys. Install the app on your repos and you're done;
-no hand-made webhooks. The repo form lists your Convex projects. On a local backend (not Convex
-cloud) these fall back to `npx convex env set` / `npx convex run admin:createToken`. Signed in as an
+**Setup needs no terminal after the first deploy.** Two credentials, kept apart on purpose:
+
+1. **Claiming** proves you own this lane-control. A fresh install (no admins) shows *Claim this
+   install*: enter your GitHub username and paste **lane-control's own deploy key** (the production
+   deploy key you deployed it with, e.g. the `LANE_CONTROL_DEPLOY_KEY` repo secret). Lane-control
+   checks the key works against its own deployment, saves you as admin and the key as
+   `LANE_CONTROL_KEY` (so the panel can edit its own settings), and signs you in. That key never
+   creates lanes.
+2. **Convex teams** are where lanes get created. Under *Settings, Convex teams*, paste a Convex team
+   access token per team. Each repo picks its team, so one lane-control can serve apps in
+   different Convex teams. Paste a new token for the same team to rotate it; a team still used by a
+   repo can't be removed. `CONVEX_TEAM_TOKEN`, if set, is the default for repos with no team.
+
+*Connect GitHub* is one click: lane-control sends a GitHub App manifest, GitHub creates a private
+app (sign-in, plus push and pull request events to `/github/webhook`), and the redirect stores its
+keys. Install the app on your repos and you're done; no hand-made webhooks. The repo form picks a
+Convex team, then lists that team's projects. On a local backend (not Convex cloud) settings fall
+back to `npx convex env set` / `npx convex run admin:createToken`. Signed in as an
 admin (a GitHub login in `LANE_ADMIN_GITHUB_USERS`), it has:
 
 - **Get started**: a checklist that ticks itself, live, from what lane-control has seen. Global steps
@@ -87,8 +97,9 @@ admin (a GitHub login in `LANE_ADMIN_GITHUB_USERS`), it has:
   and write-only lane env.
 - **Tokens**: mint (shown once) and revoke machine tokens.
 - **Settings**: admins, allowed orgs/users, the GitHub app or OAuth app, webhook secret (with
-  Generate), and the Convex team token. These are lane-control's own env vars; the panel writes
-  them through the Convex API with the team token. You can't remove yourself as an admin.
+  Generate), Convex teams (add, rotate, remove), and lane-control's deploy key. Settings are
+  lane-control's own env vars; the panel writes them with that deploy key. You can't remove
+  yourself as an admin.
 - **Activity**: every GitHub webhook delivery and what happened to it (connected, refused and why,
   ignored, lane created or archived), plus sign-ins.
 - **Docs**: concepts, lifecycle, CLI, per-vendor agent setup, previews, security, FAQ.
@@ -105,7 +116,8 @@ holds a production deploy key for the lane-control deployment. By hand:
 ```sh
 npm install
 CONVEX_DEPLOY_KEY=<control-plane prod key> npx convex deploy
-# secrets on the control plane deployment: CONVEX_TEAM_TOKEN, GITHUB_WEBHOOK_SECRET
+# secrets on the control plane deployment: GITHUB_WEBHOOK_SECRET, and CONVEX_TEAM_TOKEN as the
+# default team (or connect teams per repo in the admin panel)
 npx convex run admin:registerRepo '{"repo":"owner/app","convexProjectId":123,"seedFunction":"seed:run","env":{"APP_ENV":"lane"}}'
 npx convex run admin:createToken '{"person":"zen"}'      # prints a token once; stored hashed
 # optional: env vars a lane may set for itself, e.g. its preview URL

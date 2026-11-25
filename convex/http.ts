@@ -3,6 +3,7 @@ import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { hmacSha256Hex, sha256Hex, timingSafeEqual } from "./lib/crypto";
+import { keyWorks, setDeploymentEnv } from "./lib/mgmt";
 import { PAGE_HTML } from "./page";
 import { ADMIN_HTML } from "./adminPage";
 
@@ -248,7 +249,7 @@ function strList(b: Record<string, unknown>, k: string): string[] | undefined {
 // Public: tells the sign-in screen whether this install has any admins yet (first-run setup).
 route("/api/admin/status", "GET", async () => ({
   adminsConfigured: admins().length > 0,
-  canClaim: admins().length === 0 && selfTarget() !== null,
+  canClaim: admins().length === 0,
   githubSignIn: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
   siteUrl: process.env.CONVEX_SITE_URL ?? null,
 }));
@@ -260,13 +261,14 @@ route("/api/admin/me", "GET", async (ctx, req) => {
 
 route("/api/admin/overview", "GET", async (ctx, req) => {
   const person = await admin(ctx, req);
-  const [tokens, repos, lanes, signIns, onboarding, deliveries] = await Promise.all([
+  const [tokens, repos, lanes, signIns, onboarding, deliveries, convexTeams] = await Promise.all([
     ctx.runQuery(internal.adminPanel.tokens, {}),
     ctx.runQuery(internal.adminPanel.repos, {}),
     ctx.runQuery(internal.lanes.list, { now: Date.now() }),
     ctx.runQuery(internal.adminPanel.signIns, {}),
     ctx.runQuery(internal.adminPanel.onboarding, {}),
     ctx.runQuery(internal.adminPanel.deliveries, {}),
+    ctx.runQuery(internal.adminPanel.convexTeams, {}),
   ]);
   return {
     person,
@@ -276,12 +278,12 @@ route("/api/admin/overview", "GET", async (ctx, req) => {
     signIns,
     onboarding,
     deliveries,
+    convexTeams,
     settings: {
-      // Admins edit these from the Settings tab when lane-control can write its own env
-      // (it has a team token and runs on Convex cloud); otherwise the tab says where to.
-      editable: selfDeployment() !== null,
-      onCloud: selfTarget() !== null, // can connect Convex by pasting a team token
-      deployment: selfDeployment()?.name ?? null,
+      // Admins edit these from the Settings tab once lane-control holds its own deploy key
+      // (saved when the install was claimed); otherwise the tab says how to add it.
+      editable: !!process.env.LANE_CONTROL_KEY,
+      deployment: selfTarget().name,
       clientIdValue: process.env.GITHUB_CLIENT_ID ?? null, // public by design (it is in the OAuth URL)
       githubApp: process.env.GITHUB_APP_SLUG
         ? { slug: process.env.GITHUB_APP_SLUG, owner: process.env.GITHUB_APP_OWNER ?? null }
@@ -290,7 +292,7 @@ route("/api/admin/overview", "GET", async (ctx, req) => {
       allowedUsers: csv("LANE_ALLOWED_GITHUB_USERS"),
       allowedOrgs: csv("LANE_ALLOWED_GITHUB_ORGS"),
       githubSignIn: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
-      teamToken: !!process.env.CONVEX_TEAM_TOKEN,
+      teamToken: !!process.env.CONVEX_TEAM_TOKEN, // legacy default for repos without a Convex team
       webhookSecret: !!(process.env.GITHUB_WEBHOOK_SECRET || process.env.GITHUB_APP_WEBHOOK_SECRET),
       siteUrl: process.env.CONVEX_SITE_URL ?? null,
     },
@@ -318,7 +320,11 @@ route("/api/admin/tokens/revoke", "POST", async (ctx, req) => {
 route("/api/admin/repos/add", "POST", async (ctx, req) => {
   await admin(ctx, req);
   const b = await body(req);
-  await ctx.runMutation(internal.adminPanel.addRepo, { repo: str(b, "repo"), convexProjectId: num(b, "convexProjectId") });
+  await ctx.runMutation(internal.adminPanel.addRepo, {
+    repo: str(b, "repo"),
+    convexProjectId: num(b, "convexProjectId"),
+    convexTeamId: (optStr(b, "convexTeamId") ?? undefined) as Id<"convexTeams"> | undefined,
+  });
   return { ok: true };
 });
 
@@ -337,6 +343,8 @@ route("/api/admin/repos/update", "POST", async (ctx, req) => {
     deployArgs: strList(b, "deployArgs"),
     graceMs: b.graceMs === undefined ? undefined : num(b, "graceMs"),
     laneEnvAllow: allow as Record<string, string> | undefined,
+    // A team id, null for the default (CONVEX_TEAM_TOKEN), or left out to keep it.
+    convexTeamId: b.convexTeamId === undefined ? undefined : ((optStr(b, "convexTeamId") ?? null) as Id<"convexTeams"> | null),
   });
   return { ok: true };
 });
@@ -368,32 +376,24 @@ route("/api/admin/lanes/retry", "POST", async (ctx, req) => {
   return await ctx.runMutation(internal.lanes.ensure, { repo: str(b, "repo"), branch: str(b, "branch"), actor: person });
 });
 
-// lane-control's own deployment. On Convex cloud CONVEX_CLOUD_URL names it; LANE_SELF_DEPLOYMENT
-// ("name|url") stands in for local testing. With a team token it can change its own env vars,
-// which is how setup and Settings work without the Convex dashboard.
-function selfTarget(): { name: string; url: string } | null {
-  const override = process.env.LANE_SELF_DEPLOYMENT;
-  if (override && override.includes("|")) {
-    const [name, url] = override.split("|");
-    return { name, url };
-  }
-  const url = process.env.CONVEX_CLOUD_URL ?? "";
-  const m = /^https:\/\/([a-z0-9-]+)\.convex\.cloud\/?$/.exec(url);
-  return m ? { name: m[1], url: url.replace(/\/$/, "") } : null;
-}
-
-function selfDeployment(): { name: string; url: string } | null {
-  return process.env.CONVEX_TEAM_TOKEN ? selfTarget() : null;
+// lane-control's own deployment (CONVEX_CLOUD_URL is set on every deployment, cloud or local).
+function selfTarget(): { name: string; url: string } {
+  const url = (process.env.CONVEX_CLOUD_URL ?? "").replace(/\/$/, "");
+  const m = /^https:\/\/([a-z0-9-]+)\.convex\.cloud$/.exec(url);
+  return { name: m ? m[1] : "local", url };
 }
 
 const NOT_EDITABLE =
-  "lane-control can't change its own settings yet: connect Convex first (Get started), or set it in the Convex dashboard under Settings, Environment Variables.";
+  "lane-control doesn't hold its own deploy key yet. Add it under Settings, lane-control, then try again.";
 
-/** Write lane-control's own env vars, with CONVEX_TEAM_TOKEN or a token the caller just pasted. */
-async function writeOwnEnv(ctx: ActionCtx, vars: Record<string, string | null>, teamToken?: string) {
-  const self = teamToken ? selfTarget() : selfDeployment();
-  if (!self) throw new HttpError(409, NOT_EDITABLE);
-  await ctx.runAction(internal.provision.setLaneEnv, { deploymentName: self.name, deploymentUrl: self.url, vars, teamToken });
+/**
+ * Write lane-control's own env vars with its deploy key (LANE_CONTROL_KEY, saved at claim) or a
+ * key the caller just pasted. This is lane-control's own credential, separate from the Convex
+ * team tokens lanes are created with.
+ */
+async function writeOwnEnv(vars: Record<string, string | null>, key = process.env.LANE_CONTROL_KEY) {
+  if (!key) throw new HttpError(409, NOT_EDITABLE);
+  await setDeploymentEnv(selfTarget().url, key, vars);
 }
 
 function errMsg(e: unknown): string {
@@ -435,69 +435,84 @@ route("/api/admin/settings", "POST", async (ctx, req) => {
   if (name === "LANE_ADMIN_GITHUB_USERS" && !(value ?? "").split(",").includes(person.toLowerCase())) {
     throw new HttpError(400, `You can't remove yourself as an admin. Ask another admin, or change it in the Convex dashboard.`);
   }
-  await writeOwnEnv(ctx, { [name]: value });
+  await writeOwnEnv({ [name]: value });
   return { ok: true, name, set: value !== null, generated };
 });
 
 // ---------------------------------------------------------------- setup without a console
-// A fresh install is claimed from the browser: the first person to paste a Convex team token
-// that can manage this deployment becomes its admin. The token proves ownership (only the team
-// that owns lane-control can mint keys for it) and becomes CONVEX_TEAM_TOKEN if none is set.
+// Two separate credentials:
+// - Claiming lane-control: paste lane-control's own deploy key (the one its deploy uses). Only
+//   someone who can deploy lane-control has it, so it proves ownership. It's saved as
+//   LANE_CONTROL_KEY so Settings can change lane-control's env vars later.
+// - Creating lanes: each repo is connected to a Convex team with that team's access token
+//   (Settings, Convex teams). Different repos can live in different teams.
 
-const TEAM_TOKEN_HELP = "Create one in the Convex dashboard: Team settings, Access tokens, in the team that owns lane-control.";
+const DEPLOY_KEY_HELP =
+  "Use lane-control's production deploy key: Convex dashboard, the lane-control project, Production, Settings, URL & Deploy Key (the same key as the LANE_CONTROL_DEPLOY_KEY secret).";
 
 route("/api/admin/claim", "POST", async (ctx, req) => {
   if (admins().length) throw new HttpError(409, "This install already has admins. Sign in instead.");
   const b = await body(req);
   const login = str(b, "login").trim().replace(/^@/, "");
-  const teamToken = str(b, "teamToken").trim();
+  const key = str(b, "deployKey").trim();
   if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) throw new HttpError(400, "Enter your GitHub username");
-  if (!selfTarget()) throw new HttpError(409, "Claiming from the browser works on Convex cloud. Locally, run: npx convex run admin:createToken");
-  // Prove ownership before reserving anything, so a wrong token never holds up the real owner.
-  if (!(await ctx.runAction(internal.provision.canManage, { deploymentName: selfTarget()!.name, teamToken }))) {
-    throw new HttpError(403, `That token can't manage this deployment. ${TEAM_TOKEN_HELP}`);
-  }
+  // Prove ownership before reserving anything, so a wrong key never holds up the real owner.
+  if (!(await keyWorks(selfTarget().url, key))) throw new HttpError(403, `That key doesn't work on this deployment. ${DEPLOY_KEY_HELP}`);
   if (!(await ctx.runMutation(internal.adminPanel.reserveClaim, { login }))) {
     throw new HttpError(409, "Someone already claimed this install. Ask them to add you as an admin.");
   }
-  const vars: Record<string, string> = { LANE_ADMIN_GITHUB_USERS: login.toLowerCase() };
-  if (!process.env.CONVEX_TEAM_TOKEN) vars.CONVEX_TEAM_TOKEN = teamToken;
   try {
-    await writeOwnEnv(ctx, vars, teamToken);
+    await writeOwnEnv({ LANE_ADMIN_GITHUB_USERS: login.toLowerCase(), LANE_CONTROL_KEY: key }, key);
   } catch (e) {
     await ctx.runMutation(internal.adminPanel.releaseClaim, { login });
-    const msg = errMsg(e);
-    if (/401|403|404|Unauthorized|Forbidden|not found/i.test(msg)) {
-      throw new HttpError(403, `That token can't manage this deployment. ${TEAM_TOKEN_HELP}`);
-    }
-    throw new HttpError(502, `Couldn't finish setup: ${msg}`);
+    throw new HttpError(502, `Couldn't finish setup: ${errMsg(e)}`);
   }
   const token: string = await ctx.runAction(internal.admin.createToken, { person: login, createdBy: "setup" });
   await ctx.runMutation(internal.admin.noteLogin, { person: login, via: "setup" });
   return { person: login, token };
 });
 
-// Connect (or replace) the Convex team token from the panel. The pasted token writes itself,
-// so this works even before lane-control has one.
-route("/api/admin/convex/connect", "POST", async (ctx, req) => {
+// Give lane-control its own deploy key after the fact (installs claimed another way).
+route("/api/admin/control-key", "POST", async (ctx, req) => {
   await admin(ctx, req);
-  const b = await body(req);
-  const teamToken = str(b, "teamToken").trim();
-  try {
-    await writeOwnEnv(ctx, { CONVEX_TEAM_TOKEN: teamToken }, teamToken);
-  } catch (e) {
-    const msg = errMsg(e);
-    if (e instanceof HttpError) throw e;
-    if (/401|403|404|Unauthorized|Forbidden|not found/i.test(msg)) throw new HttpError(403, `That token can't manage this deployment. ${TEAM_TOKEN_HELP}`);
-    throw new HttpError(502, msg);
-  }
+  const key = str(await body(req), "deployKey").trim();
+  if (!(await keyWorks(selfTarget().url, key))) throw new HttpError(403, `That key doesn't work on this deployment. ${DEPLOY_KEY_HELP}`);
+  await writeOwnEnv({ LANE_CONTROL_KEY: key }, key);
   return { ok: true };
 });
 
-// Convex projects in the team, for the repo form's project picker.
+const TEAM_TOKEN_HELP = "Create one in the Convex dashboard: Team settings, Access tokens, in the team the repo's project lives in.";
+
+// Connect a Convex team (where lanes are created). Pasting a token for a team that is already
+// connected replaces its token.
+route("/api/admin/convex/teams/add", "POST", async (ctx, req) => {
+  const person = await admin(ctx, req);
+  const b = await body(req);
+  const token = str(b, "token").trim();
+  let info: { teamId: number; projects: Array<{ id: number; name: string; slug: string }> };
+  try {
+    info = await ctx.runAction(internal.provision.inspectToken, { token });
+  } catch (e) {
+    const msg = errMsg(e);
+    if (/-> (400|401|403|404):/.test(msg)) throw new HttpError(403, `Convex didn't accept that token. ${TEAM_TOKEN_HELP}`);
+    throw new HttpError(502, msg);
+  }
+  const label = (optStr(b, "label") ?? "").trim().slice(0, 60) || `Team ${info.teamId}`;
+  const id = await ctx.runMutation(internal.adminPanel.addConvexTeam, { label, teamId: info.teamId, token, by: person });
+  return { id, teamId: info.teamId, label, projects: info.projects };
+});
+
+route("/api/admin/convex/teams/remove", "POST", async (ctx, req) => {
+  await admin(ctx, req);
+  await ctx.runMutation(internal.adminPanel.removeConvexTeam, { id: str(await body(req), "id") as Id<"convexTeams"> });
+  return { ok: true };
+});
+
+// Projects for the repo form: a connected team's, or the legacy CONVEX_TEAM_TOKEN's.
 route("/api/admin/convex/projects", "GET", async (ctx, req) => {
   await admin(ctx, req);
-  return { projects: await ctx.runAction(internal.provision.projects, {}) };
+  const team = new URL(req.url).searchParams.get("team");
+  return { projects: await ctx.runAction(internal.provision.projects, { teamId: (team || undefined) as Id<"convexTeams"> | undefined }) };
 });
 
 // One-click GitHub: lane-control hands the browser a GitHub App manifest; GitHub creates the app
@@ -509,14 +524,14 @@ function siteUrl(): string {
 
 route("/api/admin/github/manifest", "POST", async (ctx, req) => {
   const person = await admin(ctx, req);
-  if (!selfDeployment()) throw new HttpError(409, NOT_EDITABLE);
+  if (!process.env.LANE_CONTROL_KEY) throw new HttpError(409, NOT_EDITABLE);
   const b = await body(req);
   const org = typeof b.org === "string" && b.org.trim() ? b.org.trim() : null;
   if (org && !/^[A-Za-z0-9-]{1,39}$/.test(org)) throw new HttpError(400, "That isn't a GitHub org name");
   const state = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0")).join("");
   await ctx.runMutation(internal.adminPanel.startGithubApp, { state, by: person });
   const site = siteUrl();
-  const name = ("Lanes " + (selfTarget()?.name ?? new URL(site).hostname.split(".")[0])).slice(0, 34);
+  const name = ("Lanes " + selfTarget().name).slice(0, 34);
   const manifest = {
     name,
     url: site + "/admin",
@@ -567,7 +582,7 @@ http.route({
       // Let the app's owner in by default: the org's members, or (for a personal app) the person.
       if (ownerIsOrg && !csv("LANE_ALLOWED_GITHUB_ORGS").length) vars.LANE_ALLOWED_GITHUB_ORGS = owner.toLowerCase();
       if (!ownerIsOrg && owner && !csv("LANE_ALLOWED_GITHUB_USERS").length) vars.LANE_ALLOWED_GITHUB_USERS = owner.toLowerCase();
-      await writeOwnEnv(ctx, vars);
+      await writeOwnEnv(vars);
       return back("github=created");
     } catch (e) {
       return back("error=" + encodeURIComponent("Couldn't finish connecting GitHub: " + errMsg(e)));
@@ -690,6 +705,7 @@ route("/api/lane/env", "POST", async (ctx, req) => {
     deploymentName: t.deploymentName,
     deploymentUrl: t.deploymentUrl,
     vars,
+    repo,
   });
   const ok = await ctx.runMutation(internal.lanes.recordEnv, {
     laneId: t.laneId,
