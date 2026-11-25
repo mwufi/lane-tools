@@ -9,6 +9,7 @@ import {
   deleteDeployKey,
   deleteDeployment,
   setDeploymentEnv,
+  listProjects,
   siteUrlFor,
 } from "./lib/mgmt";
 
@@ -80,15 +81,16 @@ export const setLaneEnv = internalAction({
     deploymentName: v.string(),
     deploymentUrl: v.string(),
     vars: v.record(v.string(), v.union(v.string(), v.null())), // null removes
+    teamToken: v.optional(v.string()), // write with this token instead of CONVEX_TEAM_TOKEN
   },
   returns: v.null(),
-  handler: async (_ctx, { deploymentName, deploymentUrl, vars }) => {
+  handler: async (_ctx, { deploymentName, deploymentUrl, vars, teamToken }) => {
     const keyName = `lane-env-${Date.now().toString(36)}`;
-    const key = await createDeployKey(deploymentName, keyName, ["deployment:env:write", "deployment:env:view"], 0);
+    const key = await createDeployKey(deploymentName, keyName, ["deployment:env:write", "deployment:env:view"], 0, teamToken);
     try {
       await setDeploymentEnv(deploymentUrl, key, vars);
     } finally {
-      await deleteDeployKey(deploymentName, keyName).catch(() => {});
+      await deleteDeployKey(deploymentName, keyName, teamToken).catch(() => {});
     }
     return null;
   },
@@ -156,5 +158,30 @@ export const teardown = internalAction({
     await deleteDeployment(info.lane.deploymentName);
     await ctx.runMutation(internal.lanes.markDeleted, { laneId, tookMs: Date.now() - started });
     return null;
+  },
+});
+
+/** Convex projects in the team of CONVEX_TEAM_TOKEN (the repo form's picker). */
+export const projects = internalAction({
+  args: {},
+  returns: v.array(v.object({ id: v.number(), name: v.string(), slug: v.string() })),
+  handler: async () => (await listProjects()).map((p) => ({ id: p.id, name: p.name, slug: p.slug })),
+});
+
+/** Whether a team token can manage a deployment: it can mint (then deletes) a key for it. */
+export const canManage = internalAction({
+  args: { deploymentName: v.string(), teamToken: v.string() },
+  returns: v.boolean(),
+  handler: async (_ctx, { deploymentName, teamToken }) => {
+    const keyName = `lane-claim-${Date.now().toString(36)}`;
+    try {
+      await createDeployKey(deploymentName, keyName, ["deployment:env:view"], 0, teamToken);
+    } catch (e) {
+      // The Management API refuses (401/403/404) a token without access; anything else is a real error.
+      if (/-> (400|401|403|404):/.test(e instanceof Error ? e.message : "")) return false;
+      throw e;
+    }
+    await deleteDeployKey(deploymentName, keyName, teamToken).catch(() => {});
+    return true;
   },
 });

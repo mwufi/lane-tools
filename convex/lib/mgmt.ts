@@ -1,7 +1,8 @@
 // Thin wrappers over Convex's Management API (api.convex.dev/v1) and the
 // per-deployment admin API. Only the control plane holds the team token.
 
-const API = "https://api.convex.dev/v1";
+// Overridable so the whole setup flow can be tested against a local mock.
+const API = process.env.LANE_MGMT_API_URL ?? "https://api.convex.dev/v1";
 
 function teamToken(): string {
   const t = process.env.CONVEX_TEAM_TOKEN;
@@ -9,11 +10,11 @@ function teamToken(): string {
   return t;
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, token?: string): Promise<T> {
   const res = await fetch(API + path, {
     method,
     headers: {
-      Authorization: `Bearer ${teamToken()}`,
+      Authorization: `Bearer ${token ?? teamToken()}`,
       "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -59,17 +60,25 @@ export async function createDeployKey(
   name: string,
   allowedActions: string[],
   ttlMs: number,
+  token?: string, // a team token other than CONVEX_TEAM_TOKEN (setup: proving ownership)
 ): Promise<string> {
   const res = await call<{ deployKey: string }>(
     "POST",
     `/deployments/${deploymentName}/create_deploy_key`,
     { name, allowedActions, expiresAt: Date.now() + Math.max(ttlMs, 31 * 60_000) },
+    token,
   );
   return res.deployKey;
 }
 
-export async function deleteDeployKey(deploymentName: string, name: string): Promise<void> {
-  await call("POST", `/deployments/${deploymentName}/delete_deploy_key`, { id: name });
+export async function deleteDeployKey(deploymentName: string, name: string, token?: string): Promise<void> {
+  await call("POST", `/deployments/${deploymentName}/delete_deploy_key`, { id: name }, token);
+}
+
+/** The Convex projects in the team that owns the team token. */
+export async function listProjects(): Promise<Array<{ id: number; name: string; slug: string }>> {
+  const t = await call<{ teamId: number }>("GET", "/token_details");
+  return await call("GET", `/teams/${t.teamId}/list_projects`);
 }
 
 export async function setDeploymentEnv(

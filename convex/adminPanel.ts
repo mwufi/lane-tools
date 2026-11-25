@@ -213,7 +213,7 @@ export const onboarding = internalQuery({
         };
       }),
       webhook: {
-        secretSet: !!process.env.GITHUB_WEBHOOK_SECRET,
+        secretSet: !!(process.env.GITHUB_WEBHOOK_SECRET || process.env.GITHUB_APP_WEBHOOK_SECRET),
         connected: goodDelivery ? { event: goodDelivery.event, at: goodDelivery.at, repo: goodDelivery.repo ?? null } : null,
         last: lastDelivery ? { event: lastDelivery.event, ok: lastDelivery.ok, note: lastDelivery.note, at: lastDelivery.at } : null,
       },
@@ -254,4 +254,57 @@ export const deliveries = internalQuery({
       note: d.note,
       at: d.at,
     })),
+});
+
+/** Reserve the claim of an install with no admins; false if someone claimed it moments ago. */
+export const reserveClaim = internalMutation({
+  args: { login: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { login }) => {
+    // Guards against two people claiming at once. The HTTP route only gets here while the
+    // install has no admins, so an old claim (admins since removed) doesn't block a new one.
+    const prior = await ctx.db.query("setup").withIndex("by_kind_and_value", (q) => q.eq("kind", "claim")).order("desc").first();
+    if (prior && Date.now() - prior.at < 5 * 60_000) return false;
+    await ctx.db.insert("setup", { kind: "claim", value: login, by: login, at: Date.now() });
+    return true;
+  },
+});
+
+/** Undo a reservation whose env write failed, so the claim can be retried. */
+export const releaseClaim = internalMutation({
+  args: { login: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { login }) => {
+    const row = await ctx.db
+      .query("setup")
+      .withIndex("by_kind_and_value", (q) => q.eq("kind", "claim").eq("value", login))
+      .first();
+    if (row) await ctx.db.delete("setup", row._id);
+    return null;
+  },
+});
+
+/** A pending GitHub App creation: the state GitHub echoes back, valid for 1 hour. */
+export const startGithubApp = internalMutation({
+  args: { state: v.string(), by: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { state, by }) => {
+    await ctx.db.insert("setup", { kind: "github-app", value: state, by, at: Date.now() });
+    return null;
+  },
+});
+
+/** Consume a pending GitHub App state; returns who started it, or null if unknown/expired. */
+export const finishGithubApp = internalMutation({
+  args: { state: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { state }) => {
+    const row = await ctx.db
+      .query("setup")
+      .withIndex("by_kind_and_value", (q) => q.eq("kind", "github-app").eq("value", state))
+      .first();
+    if (!row) return null;
+    await ctx.db.delete("setup", row._id);
+    return Date.now() - row.at < 60 * 60_000 ? row.by : null;
+  },
 });
