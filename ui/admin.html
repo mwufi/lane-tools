@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lanes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235e6ad2'/%3E%3Cpath d='M9 8v16M16 8v16M23 8v16' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root { --bg:#fcfcfd; --card:#fff; --fg:#1b1c1f; --muted:#6b6f76; --faint:#9a9ea6; --line:#ebecee; --hover:#f5f5f7; --accent:#5e6ad2; --accent-fg:#fff;
+          --ok:#3fae76; --warn:#d99a2b; --bad:#e5484d; --chip:#f3f3f5; --shadow: 0 1px 2px rgba(16,17,20,.04), 0 4px 16px rgba(16,17,20,.05); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e0f11; --card:#16171a; --fg:#e8e8ea; --muted:#8c9098; --faint:#62666d; --line:#25272b; --hover:#1c1d21;
+          --accent:#7c86e8; --ok:#4cb782; --warn:#f0b54a; --bad:#f07070; --chip:#202125; --shadow: none; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:13.5px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  code { background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; font-weight: 600; }
+  h2 { font-size: 13px; font-weight: 600; margin: 28px 0 10px; }
+  h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 22px 0 8px; }
+  p { margin: 8px 0; }
+  .sub { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .lede { color: var(--muted); font-size: 14px; margin: 0 0 18px; max-width: 640px; }
+
+  /* shell */
+  .shell { display: grid; grid-template-columns: 228px 1fr; min-height: 100vh; }
+  nav.side { border-right: 1px solid var(--line); padding: 18px 12px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; background: var(--bg); }
+  .brand { display:flex; align-items:center; gap: 10px; padding: 2px 8px 16px; font-weight: 600; font-size: 14.5px; }
+  .brand small { display:block; font-weight: 400; color: var(--faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+  .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); display:inline-flex; align-items:center; justify-content:center; flex: none; }
+  .logo svg { width: 16px; height: 16px; }
+  nav.side a.nav { display:flex; align-items:center; gap: 10px; padding: 6px 8px; border-radius: 7px; color: var(--fg); font-size: 13.5px; }
+  nav.side a.nav:hover { background: var(--hover); text-decoration: none; }
+  nav.side a.nav.on { background: var(--hover); font-weight: 500; }
+  nav.side a.nav .n { margin-left: auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  nav.side a.nav svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+  nav.side .spacer { flex: 1; }
+  .me { display:flex; align-items:center; gap: 8px; padding: 8px; border-top: 1px solid var(--line); margin-top: 8px; font-size: 12.5px; }
+  .avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--chip); flex: none; }
+  .ring { width: 18px; height: 18px; flex: none; }
+  main { padding: 32px 40px 80px; max-width: 1020px; width: 100%; }
+  .topbar { display:none; }
+
+  /* primitives */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  .pad { padding: 14px 16px; }
+  .row { display:flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+  .tablewrap { overflow-x: auto; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; }
+  tr:last-child td { border-bottom: 0; }
+  tr.off td { color: var(--faint); }
+  td.err { color: var(--bad); font-size: 12.5px; max-width: 360px; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size:12px; white-space:nowrap; color: var(--muted); background: var(--card); }
+  .dot { width:7px; height:7px; border-radius:50%; background: var(--faint); flex: none; }
+  .s-ready .dot, .s-on .dot, .s-ok .dot { background: var(--ok); }
+  .s-provisioning .dot, .s-wait .dot { background: var(--warn); }
+  .s-failed .dot, .s-off .dot, .s-bad .dot { background: var(--bad); }
+  .s-provisioning .dot { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  input, select, textarea { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); min-width: 0; outline: none; }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+  textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  button { font: inherit; font-weight: 500; padding: 7px 12px; border-radius: 8px; border: 1px solid transparent; background: var(--accent); color: var(--accent-fg); cursor: pointer; white-space: nowrap; }
+  button:hover { filter: brightness(1.06); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.ghost { background: var(--card); color: var(--fg); border-color: var(--line); }
+  button.ghost:hover { background: var(--hover); filter: none; }
+  button.danger { background: var(--card); color: var(--bad); border-color: var(--line); }
+  button.small { padding: 3px 10px; font-size: 12px; }
+  .kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--muted); }
+  .note { padding: 10px 14px; border-radius: 10px; background: var(--chip); margin: 10px 0; font-size: 13px; }
+  .note.err { background: color-mix(in srgb, var(--bad) 9%, var(--card)); color: var(--bad); }
+  .note.ok { background: color-mix(in srgb, var(--ok) 10%, var(--card)); }
+  .empty { padding: 28px 16px; color: var(--muted); text-align: center; }
+  .empty b { display:block; color: var(--fg); font-weight: 500; margin-bottom: 4px; }
+  .secret { display:flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .secret input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  pre.snip { position: relative; margin: 6px 0; padding: 10px 70px 10px 12px; background: var(--chip); border-radius: 8px; overflow-x: auto; line-height: 1.55; white-space: pre; }
+  pre.snip button { position: absolute; top: 6px; right: 6px; }
+  .chips { display:flex; flex-wrap: wrap; gap: 6px; }
+
+  /* get started */
+  .progress { display:flex; align-items:center; gap: 14px; margin: 4px 0 8px; }
+  .progress .track { flex: 1; height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; max-width: 360px; }
+  .progress .track i { display:block; height: 100%; background: var(--ok); border-radius: 3px; transition: width .4s; }
+  .progress b { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .step { border-bottom: 1px solid var(--line); }
+  .step:last-child { border-bottom: 0; }
+  .step > summary { display:grid; grid-template-columns: 22px 1fr auto; gap: 12px; align-items: center; padding: 12px 16px; cursor: pointer; list-style: none; }
+  .step > summary::-webkit-details-marker { display:none; }
+  .step > summary:hover { background: var(--hover); }
+  .step:first-child > summary { border-radius: 12px 12px 0 0; }
+  .check { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--faint); display:inline-flex; align-items:center; justify-content:center; }
+  .done .check { background: var(--ok); border-color: var(--ok); }
+  .done .check::after { content: ""; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }
+  .warn .check { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+  .warn .check::after { content: "!"; color: var(--bad); font-weight: 700; font-size: 11px; }
+  .next .check { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .step .t { font-weight: 500; }
+  .step.done .t { color: var(--muted); }
+  .step .d { color: var(--muted); font-size: 12.5px; }
+  .step .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-left: 6px; font-weight: 400; }
+  .chev { color: var(--faint); transition: transform .15s; font-size: 12px; }
+  details[open] > summary .chev { transform: rotate(90deg); }
+  .how { padding: 2px 16px 16px 50px; font-size: 13px; }
+  .how ol { margin: 0; padding-left: 18px; } .how li { margin: 8px 0; }
+  .how .bad { color: var(--bad); }
+  .repohead { display:flex; align-items:center; gap: 10px; margin: 26px 0 8px; }
+  .repohead h3 { margin: 0; color: var(--fg); font-size: 13px; font-weight: 600; }
+  .done-banner { display:flex; gap: 14px; align-items:center; padding: 16px; margin-bottom: 8px; }
+  .done-banner .big { width: 36px; height: 36px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); display:flex; align-items:center; justify-content:center; font-size: 18px; flex: none; }
+
+  /* repos & settings */
+  .field { display:grid; grid-template-columns: 170px 1fr; gap: 14px; padding: 12px 16px; align-items: start; border-bottom: 1px solid var(--line); }
+  .field:last-child { border-bottom: 0; }
+  .field > label { color: var(--fg); font-size: 13px; font-weight: 500; padding-top: 7px; }
+  .field > label .sub { display:block; font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .help { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .repo { margin-bottom: 18px; }
+  .repo > .head { display:flex; align-items:center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .repo > .head b { font-size: 14px; }
+  .toolbar { display:flex; gap: 8px; align-items: center; margin: 0 0 12px; flex-wrap: wrap; }
+  .seg { display:inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card); }
+  .seg button { background: none; color: var(--muted); border: 0; border-radius: 0; padding: 5px 10px; font-size: 12.5px; font-weight: 500; }
+  .seg button.on { background: var(--hover); color: var(--fg); }
+
+  /* docs */
+  .docs { display:grid; grid-template-columns: 170px 1fr; gap: 28px; }
+  .docs .toc { position: sticky; top: 24px; align-self: start; display:flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  .docs .toc a { color: var(--muted); padding: 3px 0; }
+  .docs .toc a:hover { color: var(--fg); text-decoration: none; }
+  .docs article h2 { font-size: 16px; margin: 34px 0 8px; letter-spacing: -0.01em; scroll-margin-top: 20px; }
+  .docs article h2:first-child { margin-top: 0; }
+  .docs article p, .docs article li { max-width: 680px; }
+  .docs article ul, .docs article ol { padding-left: 20px; }
+  .docs article li { margin: 5px 0; }
+  .flow { display:flex; gap: 0; align-items: stretch; margin: 14px 0; overflow-x: auto; }
+  .flow > div { flex: 1; min-width: 120px; padding: 10px 12px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; }
+  .flow > div:first-child { border-radius: 10px 0 0 10px; } .flow > div:last-child { border-radius: 0 10px 10px 0; }
+  .flow > div + div { border-left: 0; }
+  .flow b { display:block; font-size: 12px; margin-bottom: 2px; }
+  .cmds td:first-child { white-space: nowrap; }
+  .faq details { border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .faq summary { cursor: pointer; font-weight: 500; }
+  .faq details p { color: var(--muted); }
+
+  /* landing */
+  .landing { max-width: 720px; margin: 0 auto; padding: 72px 20px 60px; }
+  .landing h1 { font-size: 34px; letter-spacing: -0.03em; line-height: 1.15; margin: 22px 0 12px; }
+  .landing .lede { font-size: 16px; }
+  .landing .cta { display:flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 22px 0 8px; }
+  .landing .cta button { padding: 9px 16px; font-size: 14px; }
+  .features { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 40px 0 0; }
+  .features .card { padding: 14px 16px; }
+  .features b { display:block; margin-bottom: 4px; }
+  .features p { margin: 0; color: var(--muted); font-size: 13px; }
+  .lanes-art { display:flex; flex-direction: column; gap: 6px; margin: 30px 0 0; }
+  .lanes-art div { display:flex; align-items:center; gap: 10px; font-size: 12.5px; }
+  .lanes-art .bar { flex: 1; height: 8px; border-radius: 4px; background: var(--chip); position: relative; overflow: hidden; }
+  .lanes-art .bar i { position:absolute; inset: 0; width: var(--w); background: color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 4px; }
+  .lanes-art .lbl { width: 150px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* overlays */
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.18); z-index: 20; max-width: min(560px, calc(100vw - 32px)); }
+  .toast.err { background: var(--bad); color: #fff; }
+  .scrim { position: fixed; inset: 0; background: rgba(10,10,12,.35); display:flex; align-items:center; justify-content:center; z-index: 30; padding: 16px; }
+  .modal { background: var(--card); border-radius: 14px; padding: 20px; width: 420px; max-width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .modal h3 { color: var(--fg); font-size: 15px; margin: 0 0 6px; font-weight: 600; }
+  .modal .actions { display:flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .live { display:inline-flex; align-items:center; gap: 6px; font-size: 12px; color: var(--faint); }
+  .live .dot { background: var(--ok); }
+
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.side { position: static; height: auto; flex-direction: row; overflow-x: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); gap: 4px; }
+    nav.side .brand, nav.side .spacer, nav.side .me { display:none; }
+    nav.side a.nav { white-space: nowrap; padding: 6px 10px; }
+    nav.side a.nav svg { display:none; }
+    .topbar { display:flex; align-items:center; gap: 10px; padding: 12px 16px 4px; font-weight: 600; }
+    main { padding: 18px 16px 60px; }
+    .field { grid-template-columns: 1fr; gap: 6px; } .field > label { padding-top: 0; }
+    .hide-sm { display:none; }
+    .docs { grid-template-columns: 1fr; } .docs .toc { display:none; }
+    .features { grid-template-columns: 1fr; }
+    .how { padding-left: 16px; }
+    .landing { padding-top: 40px; } .landing h1 { font-size: 28px; }
+    .progress { flex-wrap: wrap; gap: 6px 12px; } .progress .track { flex-basis: 100%; max-width: none; }
+    .topbar { display:none; }
+  }
+</style>
+</head>
+<body><div id="app"><main><p class="sub">Loading…</p></main></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+function ago(t) { if (!t) return "never"; const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 45) return "just now"; if (s < 3600) return Math.max(1, Math.round(s/60)) + "m ago";
+  if (s < 86400) return Math.floor(s/3600) + "h ago"; return Math.floor(s/86400) + "d ago"; }
+function pill(state, label) { return '<span class="pill s-' + esc(state) + '"><span class="dot"></span>' + esc(label ?? state) + '</span>'; }
+const DAY = 86400000;
+const LOGO = '<span class="logo"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 3v10M8 3v10M12.5 3v10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg></span>';
+const ICON = {
+  start: '<path d="M3 8.5l3 3 7-7" />',
+  lanes: '<path d="M4 2.5v11M8 2.5v11M12 2.5v11" />',
+  repos: '<path d="M3 3.5h10v9H3z M3 6.5h10" />',
+  tokens: '<circle cx="5.5" cy="8" r="2.5"/><path d="M8 8h6M12 8v2.5" />',
+  settings: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M3.6 12.4L5 11M11 5l1.4-1.4" />',
+  activity: '<path d="M1.5 8.5h3l2-5 3 9 2-4h3" />',
+  docs: '<path d="M4 2h6l3 3v9H4z M10 2v3h3 M6 8.5h5M6 11h5" />',
+};
+const icon = (k) => '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + ICON[k] + '</svg>';
+
+function token() {
+  const m = location.hash.match(/token=([^&]+)/);
+  if (m) { try { localStorage.setItem("laneToken", m[1]); } catch {} history.replaceState(null, "", location.pathname + location.search); return m[1]; }
+  try { return localStorage.getItem("laneToken"); } catch { return null; }
+}
+let TOKEN = token();
+let TAB = (location.hash.match(/tab=(\w+)/) || [])[1] || "start";
+let DATA = null, LAST = "", NEWTOKEN = null, SECRET = null, PREFILL = null, FILTER = { q: "", state: "open" };
+const OPEN = new Set(); // which Get started steps the viewer opened or closed by hand
+const CLOSED = new Set();
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? { headers: { authorization: "Bearer " + TOKEN } } :
+    { method: "POST", headers: { authorization: "Bearer " + TOKEN, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({})); if (!r.ok) { const e = new Error(j.error || "Request failed (HTTP " + r.status + ")"); e.status = r.status; throw e; } return j;
+}
+
+// ---------------------------------------------------------------- overlays
+let toastTimer;
+function toast(msg, err) {
+  let t = $(".toast"); if (!t) { t = document.createElement("div"); document.body.appendChild(t); }
+  t.className = "toast" + (err ? " err" : ""); t.textContent = msg; clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.remove(), err ? 7000 : 3000);
+}
+function ask(title, body, ok, danger) {
+  return new Promise((resolve) => {
+    const s = document.createElement("div"); s.className = "scrim";
+    s.innerHTML = '<div class="modal" role="dialog"><h3>' + esc(title) + '</h3><p class="sub">' + esc(body) + '</p><div class="actions"><button class="ghost" data-no>Cancel</button><button ' + (danger ? 'class="danger" ' : '') + 'data-yes>' + esc(ok) + '</button></div></div>';
+    const done = (v) => { s.remove(); document.removeEventListener("keydown", key); resolve(v); };
+    const key = (e) => { if (e.key === "Escape") done(false); if (e.key === "Enter") done(true); };
+    s.onclick = (e) => { if (e.target === s || e.target.hasAttribute("data-no")) done(false); if (e.target.hasAttribute("data-yes")) done(true); };
+    document.addEventListener("keydown", key); document.body.appendChild(s); s.querySelector("[data-yes]").focus();
+  });
+}
+async function act(btn, fn, ok) {
+  if (btn) btn.disabled = true;
+  try { const r = await fn(); if (ok) toast(typeof ok === "function" ? ok(r) : ok); await load(true); }
+  catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
+}
+
+function snip(text) { return '<pre class="snip"><button class="small ghost" data-copy>Copy</button>' + esc(text) + '</pre>'; }
+function wireSnips() {
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = (e) => {
+    e.preventDefault(); const text = b.parentElement.textContent.replace(/^Copy(ied)?/, "");
+    navigator.clipboard?.writeText(text); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); });
+}
+
+// ---------------------------------------------------------------- signed out
+async function signIn(msg) {
+  let cfg = {}, st = {}; try { cfg = await (await fetch("/api/auth/config")).json(); st = await (await fetch("/api/admin/status")).json(); } catch {}
+  const host = location.host;
+  const art = [["main", "100%"], ["fix/checkout-race", "62%"], ["claude/search-ranking", "38%"], ["codex/onboarding-copy", "80%"]]
+    .map(([b, w]) => '<div><span class="lbl">' + b + '</span><span class="bar"><i style="--w:' + w + '"></i></span></div>').join("");
+  let h = '<div class="landing">' + '<div class="row">' + LOGO + '<b style="font-size:15px">Lanes</b><span class="faint">' + esc(host) + '</span></div>' +
+    '<h1>A real backend for every branch.</h1>' +
+    '<p class="lede">Each branch gets its own seeded cloud deployment, shared by every person, agent and preview working on it. It appears when the branch starts and cleans itself up after the merge.</p>';
+  if (st.adminsConfigured === false) {
+    h += '<div class="card pad" style="margin-top:22px"><b>Set up this install</b><p class="sub">Lane-control is running, but has no admins yet. Two steps to the admin panel:</p>' +
+      '<ol style="padding-left:18px;margin:8px 0 0"><li>In the Convex dashboard for this deployment (lane-control), open <b>Settings, Environment Variables</b> and add <code>LANE_ADMIN_GITHUB_USERS</code> with your GitHub username.</li>' +
+      '<li>' + (st.githubSignIn ? 'Sign in with GitHub below, or mint yourself a token:' : 'Mint yourself a token (GitHub sign-in can be set up from the panel later):') +
+      snip("npx convex run admin:createToken " + "'" + JSON.stringify({ person: "<your GitHub username>" }) + "'") + '</li></ol></div>';
+  } else if (msg) {
+    h += '<div class="note err" style="margin-top:22px">' + esc(msg) + '</div>';
+  }
+  h += '<div class="cta">' + (cfg.webLogin ? '<a href="/auth/github/start?next=admin"><button>Sign in with GitHub</button></a>' : '') +
+    '<button ' + (cfg.webLogin ? 'class="ghost" ' : '') + 'id="usetok">Use a lane token</button></div>' +
+    '<div id="tokrow" class="row" style="display:none;margin-top:8px"><input id="tok" type="password" placeholder="lane_…" style="width:340px;max-width:100%"><button id="go">Continue</button></div>' +
+    '<p class="faint" style="font-size:12.5px">The admin panel is for lane admins. Everyone else uses <a href="/">the lane list</a> and the <code>lane</code> CLI.</p>' +
+    '<div class="lanes-art">' + art + '</div>' +
+    '<div class="features">' +
+    '<div class="card"><b>Branch-shaped</b><p>A lane follows its branch: created on the first push or PR, redeployed on every push that touches the backend, archived on merge.</p></div>' +
+    '<div class="card"><b>Shared by every agent</b><p>Claude, Codex, Cursor, Amp and people join the same lane, see each other on its page and never deploy over each other.</p></div>' +
+    '<div class="card"><b>Seeded and safe</b><p>Every lane runs your setup functions and gets short-lived keys scoped to that one deployment. Production is never touched.</p></div>' +
+    '</div></div>';
+  $("#app").innerHTML = h; wireSnips();
+  $("#usetok").onclick = () => { $("#tokrow").style.display = "flex"; $("#tok").focus(); };
+  const go = () => { TOKEN = $("#tok").value.trim(); if (!TOKEN) return; try { localStorage.setItem("laneToken", TOKEN); } catch {} load(); };
+  $("#go").onclick = go; $("#tok").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+function signOut() { try { localStorage.removeItem("laneToken"); } catch {} TOKEN = null; DATA = null; LAST = ""; signIn(); }
+
+// ---------------------------------------------------------------- load & render
+async function load(force) {
+  if (!TOKEN) return signIn();
+  try {
+    const d = await api("/api/admin/overview");
+    const key = JSON.stringify(d);
+    if (!force && key === LAST) return; // nothing changed: keep the page as it is
+    LAST = key; DATA = d; render();
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) return signIn(e.message);
+    if (!DATA) $("#app").innerHTML = '<main><div class="note err">' + esc(e.message) + '</div><button class="ghost" onclick="location.reload()">Try again</button></main>';
+  }
+}
+// Live: refresh every 8s while the tab is visible, unless the viewer is typing or in a dialog.
+setInterval(() => {
+  if (!DATA || document.hidden || $(".scrim")) return;
+  const a = document.activeElement; if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+  load();
+}, 8000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && DATA) load(); });
+
+function setTab(t) { TAB = t; history.replaceState(null, "", "#tab=" + t); render(); window.scrollTo(0, 0); }
+
+function render() {
+  const d = DATA; if (!d) return;
+  const keep = window.scrollY;
+  const open = d.lanes.filter((l) => l.state !== "deleted" && l.state !== "archived");
+  const failed = open.filter((l) => l.state === "failed").length;
+  const live = d.tokens.filter((t) => !t.revoked);
+  const prog = progress(d);
+  const nav = [
+    ["start", "Get started", prog.done < prog.total ? prog.done + "/" + prog.total : "✓"],
+    ["lanes", "Lanes", failed ? '<span style="color:var(--bad)">' + failed + ' failed</span>' : open.length],
+    ["repos", "Repos", d.repos.length],
+    ["tokens", "Tokens", live.length],
+    ["settings", "Settings", ""],
+    ["activity", "Activity", ""],
+    ["docs", "Docs", ""],
+  ];
+  const site = (d.settings.siteUrl || location.origin).replace(/^https?:\/\//, "");
+  let h = '<div class="shell"><nav class="side"><div class="brand">' + LOGO + '<div>Lanes<small>' + esc(site) + '</small></div></div>' +
+    nav.map(([k, l, n]) => '<a href="#tab=' + k + '" class="nav' + (TAB === k ? " on" : "") + '" data-tab="' + k + '">' + icon(k) + '<span>' + l + '</span><span class="n">' + n + '</span></a>').join("") +
+    '<div class="spacer"></div><a class="nav" href="/">' + icon("lanes") + '<span>Lane list</span></a>' +
+    '<div class="me"><img class="avatar" src="https://github.com/' + encodeURIComponent(d.person) + '.png?size=44" alt="" onerror="this.style.visibility=\'hidden\'"><span class="grow">' + esc(d.person) + '</span><a href="#" id="signout" class="faint">Sign out</a></div></nav>' +
+    '<main><div class="topbar">' + LOGO + 'Lanes</div>' +
+    ({ start: startTab, lanes: lanesTab, tokens: tokensTab, repos: reposTab, settings: settingsTab, activity: activityTab, docs: docsTab })[TAB](d) + '</main></div>';
+  $("#app").innerHTML = h;
+  document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = (e) => { e.preventDefault(); if (b.dataset.prefill) PREFILL = b.dataset.prefill; setTab(b.dataset.tab); });
+  $("#signout").onclick = (e) => { e.preventDefault(); signOut(); };
+  if (PREFILL && $("#tname")) { $("#tname").value = PREFILL; $("#tname").focus(); PREFILL = null; }
+  document.querySelectorAll("details.step").forEach((el) => el.addEventListener("toggle", () => {
+    const id = el.dataset.id; if (el.open) { OPEN.add(id); CLOSED.delete(id); } else { CLOSED.add(id); OPEN.delete(id); } }));
+  wireSnips();
+  wire();
+  window.scrollTo(0, keep);
+}
+
+// ---------------------------------------------------------------- Get started
+// Every step checks itself from what lane-control has seen; nothing is ticked by hand.
+const go = (tab, label, prefill, ghost) => '<a href="#" data-tab="' + tab + '"' + (prefill ? ' data-prefill="' + esc(prefill) + '"' : '') + '><button class="small' + (ghost ? ' ghost' : '') + '">' + esc(label) + '</button></a>';
+const DASH = "the Convex dashboard for lane-control, <b>Settings, Environment Variables</b>";
+
+function steps(d) {
+  const o = d.onboarding, s = d.settings, site = s.siteUrl || location.origin, hook = o.webhook;
+  const setIn = (name) => s.editable ? go("settings", "Set " + name, null, true) : "in " + DASH;
+  const groups = [];
+  groups.push({ id: "cp", group: "Set up lane-control", items: [
+    { id: "running", title: "Lane-control is running", done: true, detail: site.replace(/^https?:\/\//, "") + " · you're signed in as " + d.person },
+    { id: "convex", title: "Connect Convex, where lanes are created",
+      done: s.teamToken && (o.provisionedOnce || !o.failed), warn: s.teamToken && !o.provisionedOnce && !!o.failed,
+      detail: !s.teamToken ? "No team token yet" : o.provisionedOnce ? "Verified: lanes have been created with it" : o.failed ? "A lane failed to start on " + o.failed.where : "Token set. It's verified when the first lane starts.",
+      how: '<ol><li>In the Convex dashboard, pick the team lanes should live in. Use one that does <b>not</b> own production.</li>' +
+        '<li>Team settings, Access tokens: create a token.</li><li>In ' + DASH + ', set <code>CONVEX_TEAM_TOKEN</code> to it. (This one is set in the dashboard because it is what lets this panel change settings.)</li></ol>' +
+        (o.failed && o.failed.error ? '<p class="bad">Last failure: ' + esc(o.failed.error) + '</p>' + go("lanes", "Open failed lanes", null, true) : '') },
+    { id: "signin", title: "Let your team sign in with GitHub", optional: true,
+      done: s.githubSignIn && (s.allowedUsers.length + s.allowedOrgs.length > 0),
+      detail: !s.githubSignIn ? "Not set up. You can mint tokens instead." : (s.allowedOrgs.length + s.allowedUsers.length) ? "Open to " + [...s.allowedOrgs.map((x) => x + " (org)"), ...s.allowedUsers].join(", ") : "Set up, but nobody is allowed yet",
+      how: '<ol><li>On GitHub: Settings, Developer settings, <b>New OAuth App</b>. Homepage URL and callback URL:' + snip(site) + snip(site + "/auth/github/callback") + 'Tick <b>Enable Device Flow</b> (for <code>lane login</code>).</li>' +
+        '<li>Paste its client ID and a client secret, and say who may sign in (an org, or usernames). ' + setIn("GitHub sign-in") + '</li></ol>' },
+  ]});
+  if (!o.repos.length) {
+    groups.push({ id: "repo", group: "Connect your first repo", items: [
+      { id: "register", title: "Register a repo and its Convex project", done: false, detail: "No repos yet",
+        how: '<p>Each lane is a dev deployment in the repo\'s Convex project. The project id is in the Convex dashboard, Project settings.</p>' + go("repos", "Register a repo") },
+    ]});
+  }
+  for (const r of o.repos) {
+    const hookOk = r.lastDelivery && r.lastDelivery.ok;
+    const ghDone = !!r.machinePush || !!hookOk;
+    groups.push({ id: "r:" + r.repo, group: r.repo, repo: r, items: [
+      { id: r.repo + ":register", title: "Registered", done: true, detail: "Lanes go to Convex project " + r.convexProjectId },
+      { id: r.repo + ":seed", title: "Seed every new lane", optional: true, done: r.setup > 0,
+        detail: r.setup > 0 ? r.setup + " setup function" + (r.setup === 1 ? "" : "s") + " run once per lane" : "New lanes start empty",
+        how: '<p>Add setup functions (migrations, then a seed such as <code>seed:run</code>) so every lane starts with sample data.</p>' + go("repos", "Edit " + r.repo, null, true) },
+      { id: r.repo + ":github", title: "Connect GitHub", done: ghDone, warn: !!(r.lastDelivery && !r.lastDelivery.ok),
+        detail: r.machinePush ? "Pushes arrive from " + r.machinePush.actor + " (" + ago(r.machinePush.at) + ")" :
+          hookOk ? "Webhook delivering (" + ago(r.lastDelivery.at) + ")" :
+          r.lastDelivery ? r.lastDelivery.note : "Nothing from GitHub yet",
+        how: githubHow(d, r) },
+      { id: r.repo + ":live", title: "First lane live", done: r.everLive, warn: !r.everLive && !!r.failed,
+        detail: r.live ? r.live.branch + " is live" + (r.lanes > 1 ? " · " + r.lanes + " open lanes" : "") : r.everLive ? "Lanes have deployed before" : r.failed ? "Failed on " + r.failed.branch : r.lanes ? "Starting…" : "No lane yet",
+        how: '<p>Open a PR or push a branch that changes <code>convex/</code>. Or from a checkout of the repo:</p>' + snip("npm install -g github:mwufi/lane-tools\nlane login --url " + site + "\nlane join --task \"try lanes\"") +
+          (r.failed ? '<p class="bad">' + esc(r.failed.error || "Provisioning failed") + '</p><button class="small" data-retry="' + esc(r.repo) + '|' + esc(r.failed.branch) + '">Retry ' + esc(r.failed.branch) + '</button>' : '') },
+      { id: r.repo + ":down", title: "First lane wound down after a merge", done: r.archived,
+        detail: r.archived ? "Merged lanes clean themselves up" : "Merge or close a PR whose branch has a lane",
+        how: '<p>With GitHub connected, merging or closing the PR archives its lane: keys are revoked at once and the deployment is deleted after the grace period.</p>' },
+    ]});
+  }
+  groups.push({ id: "team", group: "Bring your team and agents", items: [
+    { id: "agent", title: "First agent on a lane", done: !!o.agentJoined,
+      detail: o.agentJoined ? "A " + o.agentJoined.vendor + " agent joined " + ago(o.agentJoined.at) : "No agent has joined a lane yet",
+      how: '<ol><li>Mint a token for each agent environment (Claude Code, Codex, Cursor, Amp) ' + go("tokens", "Mint agent token", "agents", true) + ' and store it there as the secret <code>LANE_TOKEN</code>, with <code>LANE_URL</code> =' + snip(site) + '</li>' +
+        '<li>In the environment\'s setup script:' + snip("npm install -g github:mwufi/lane-tools") + '</li><li>The agent runs <code>lane join --task "…"</code> on its branch. See <a href="#" data-tab="docs">Docs, Agents</a> for each vendor.</li></ol>' },
+    { id: "preview", title: "Previews use their own lane", optional: true, done: !!o.envSet,
+      detail: o.envSet ? "A lane set its own preview URL (" + (o.envSet.where || "") + ")" : "Vercel or Netlify previews built against the branch's lane",
+      how: '<ol><li>Mint a token for your preview host ' + go("tokens", "Mint vercel token", "vercel", true) + ' and set it as <code>LANE_TOKEN</code> for Preview builds only.</li>' +
+        '<li>In the preview build, run <code>lane wait</code>, then build against the lane\'s URL.</li>' +
+        '<li>To give each lane its preview URL, allow a per-lane var such as <code>SITE_URL</code> in the repo settings, then run <code>lane env SITE_URL=https://…</code> from the build.</li></ol>' },
+  ]});
+  return groups;
+}
+
+function githubHow(d, r) {
+  const s = d.settings, site = s.siteUrl || location.origin;
+  const repoUrl = "https://github.com/" + r.repo;
+  let secretStep;
+  if (SECRET) secretStep = '<div class="note ok">Webhook secret, shown once. Paste it into GitHub now.<div class="secret"><input readonly value="' + esc(SECRET) + '"><button class="ghost small" data-copyval="' + esc(SECRET) + '">Copy</button></div></div>';
+  else if (s.webhookSecret) secretStep = 'Secret: the one already set as <code>GITHUB_WEBHOOK_SECRET</code>' + (s.editable ? ' (or <a href="#" data-gensecret>generate a new one</a>)' : '') + '.';
+  else if (s.editable) secretStep = '<button class="small" data-gensecret>Generate webhook secret</button>';
+  else secretStep = 'A random secret, also set as <code>GITHUB_WEBHOOK_SECRET</code> in ' + DASH + '.';
+  const last = r.lastDelivery;
+  return '<ol>' +
+    '<li><b>Webhook</b>, so pushes and merges reach lane-control. <a href="' + repoUrl + '/settings/hooks/new" target="_blank" rel="noopener">Add it on GitHub</a> with content type <code>application/json</code>, events <b>Pushes</b> and <b>Pull requests</b>, and payload URL:' + snip(site + "/github/webhook") + secretStep +
+      (last ? '<p>' + pill(last.ok ? "ok" : "bad", last.ok ? "Last delivery OK" : "Last delivery failed") + ' <span class="sub">' + esc(last.note) + ' · ' + ago(last.at) + '</span></p>' :
+        '<p class="sub">Waiting for a delivery. GitHub sends a ping as soon as you save the webhook.</p>') + '</li>' +
+    '<li><b>Deployer</b>, so each push redeploys its lane. Mint a token ' + go("tokens", "Mint github-actions token", "github-actions", true) + ' and add it on GitHub as the Actions secret <code>LANE_DEPLOYER_TOKEN</code>, with the variable <code>LANE_URL</code> =' + snip(site) + ' (<a href="' + repoUrl + '/settings/secrets/actions" target="_blank" rel="noopener">open Actions secrets</a>)</li>' +
+    '<li>Commit these two files:' + snip(".lane.json\n" + JSON.stringify({ repo: r.repo, url: site }, null, 2)) + snip(DEPLOYER_YML) + '</li></ol>';
+}
+
+const DEPLOYER_YML = ".github/workflows/lane-deployer.yml\n" + [
+  "name: lane deployer",
+  "on:",
+  "  push:",
+  "    branches-ignore: [main]",
+  "    paths: [\"convex/**\", \"package-lock.json\"]",
+  "concurrency: { group: \"lane-${{ github.ref }}\", cancel-in-progress: false }",
+  "jobs:",
+  "  deploy:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - uses: actions/checkout@v4",
+  "        with: { fetch-depth: 0 }",
+  "      - uses: actions/setup-node@v4",
+  "        with: { node-version: 22 }",
+  "      - run: npm ci",
+  "      - run: npx -y github:mwufi/lane-tools deploy",
+  "        env:",
+  "          LANE_URL: ${{ vars.LANE_URL }}",
+  "          LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}",
+  "          LANE_DEPLOYER: github-actions",
+].join("\n");
+
+function progress(d) {
+  const req = steps(d).flatMap((g) => g.items).filter((x) => !x.optional);
+  return { done: req.filter((x) => x.done).length, total: req.length };
+}
+
+function startTab(d) {
+  const groups = steps(d), all = groups.flatMap((g) => g.items), req = all.filter((x) => !x.optional);
+  const done = req.filter((x) => x.done).length, next = all.find((x) => !x.done && !x.optional) || all.find((x) => !x.done);
+  let h = '<div class="row"><h1 class="grow">Get started</h1><span class="live"><span class="dot"></span>Checks itself live</span></div>' +
+    '<p class="lede">Lanes give every branch its own seeded backend. Each step below ticks itself as soon as lane-control sees it happen.</p>';
+  if (done === req.length) {
+    h += '<div class="card done-banner"><span class="big">✓</span><div class="grow"><b>You\'re set up.</b><div class="sub">Every branch of ' + esc(d.onboarding.repos.map((r) => r.repo).join(", ")) + ' can have a lane. Open a PR to get one.</div></div>' + go("lanes", "See lanes", null, true) + '</div>';
+  } else {
+    h += '<div class="progress"><div class="track"><i style="width:' + Math.round(100 * done / req.length) + '%"></i></div><b>' + done + ' of ' + req.length + '</b><span class="sub">Next: ' + esc(next.title) + '</span></div>';
+  }
+  for (const g of groups) {
+    if (g.repo) h += '<div class="repohead"><h3>' + esc(g.group) + '</h3>' + (g.repo.live ? pill("ready", "live: " + g.repo.live.branch) : g.repo.failed ? pill("failed", "failed: " + g.repo.failed.branch) : "") + '</div>';
+    else h += '<h3>' + esc(g.group) + '</h3>';
+    h += '<div class="card">';
+    for (const x of g.items) {
+      const cls = ["step", x.done ? "done" : "", x.warn ? "warn" : "", x === next ? "next" : ""].join(" ");
+      const isOpen = OPEN.has(x.id) || (x === next && !CLOSED.has(x.id));
+      h += '<details class="' + cls + '" data-id="' + esc(x.id) + '"' + (isOpen && x.how ? " open" : "") + '><summary><span class="check"></span><span><div class="t">' + esc(x.title) +
+        (x.optional ? '<span class="tag">optional</span>' : '') + '</div><div class="d">' + esc(x.detail) + '</div></span>' + (x.how ? '<span class="chev">▶</span>' : '<span></span>') + '</summary>' +
+        (x.how ? '<div class="how">' + x.how + '</div>' : '') + '</details>';
+    }
+    h += '</div>';
+  }
+  return h;
+}
+
+// ---------------------------------------------------------------- Lanes
+function lanesTab(d) {
+  const all = d.lanes.filter((l) => l.state !== "deleted");
+  const q = FILTER.q.toLowerCase();
+  const rows = all.filter((l) => (FILTER.state === "all" || (FILTER.state === "open" ? l.state !== "archived" : l.state === FILTER.state)) &&
+    (!q || (l.branch + " " + l.repo).toLowerCase().includes(q)));
+  const count = (st) => all.filter((l) => st === "open" ? l.state !== "archived" : st === "all" || l.state === st).length;
+  let h = '<h1>Lanes</h1><p class="lede">One Convex deployment per branch. Click a branch for its page: agents, deploys and activity.</p>';
+  if (!all.length) return h + '<div class="card empty"><b>No lanes yet</b>A lane appears when a PR opens on a registered repo, or someone runs <code>lane join</code> on a branch.<p>' + go("start", "Finish setup", null, true) + '</p></div>';
+  h += '<div class="toolbar"><input id="lq" placeholder="Filter by branch or repo" value="' + esc(FILTER.q) + '" style="width:260px;max-width:100%"><span class="seg">' +
+    [["open", "Open"], ["failed", "Failed"], ["archived", "Archived"], ["all", "All"]].map(([k, l]) => '<button data-lf="' + k + '" class="' + (FILTER.state === k ? "on" : "") + '">' + l + ' <span class="faint">' + count(k) + '</span></button>').join("") + '</span></div>';
+  if (!rows.length) return h + '<div class="card empty">No lanes match.</div>';
+  h += '<div class="card tablewrap"><table><tr><th>Branch</th><th>State</th><th class="hide-sm">Repo</th><th>Agents</th><th class="hide-sm">Deployed</th><th class="hide-sm">Activity</th><th></th></tr>' +
+    rows.map((l) => {
+      const page = '/lane?repo=' + encodeURIComponent(l.repo) + '&branch=' + encodeURIComponent(l.branch);
+      const state = l.deploying ? pill("provisioning", "deploying") : pill(l.state);
+      const btn = l.state === "failed" ? '<button class="small" data-retry="' + esc(l.repo) + '|' + esc(l.branch) + '">Retry</button>' :
+        l.state === "archived" ? '' : '<button class="small danger" data-archive="' + esc(l.repo) + '|' + esc(l.branch) + '">Archive</button>';
+      return '<tr class="' + (l.state === "archived" ? "off" : "") + '"><td><a href="' + page + '">' + esc(l.branch) + '</a>' +
+        (l.dashboardUrl && l.state !== "archived" ? ' <a class="faint" href="' + esc(l.dashboardUrl) + '" target="_blank" rel="noopener" title="Convex dashboard">↗</a>' : '') + '</td>' +
+        '<td>' + state + '</td><td class="hide-sm sub">' + esc(l.repo) + '</td><td>' + (l.activeAgents ? '<b>' + l.activeAgents + '</b>' : '<span class="faint">0</span>') + '</td>' +
+        '<td class="hide-sm mono sub">' + esc((l.deployedSha || "").slice(0, 7) || "–") + '</td><td class="hide-sm sub">' + ago(l.lastActivity) + '</td><td style="text-align:right">' + btn + '</td></tr>' +
+        (l.state === "failed" && l.error ? '<tr><td colspan="7" class="err">' + esc(l.error.slice(0, 400)) + '</td></tr>' : '');
+    }).join("") + '</table></div>' +
+    '<p class="sub">Archive revokes a lane\'s keys now and deletes its deployment after the repo\'s grace period. A push or reopened PR brings it back. Retry re-provisions a failed lane from scratch.</p>';
+  return h;
+}
+
+// ---------------------------------------------------------------- Tokens
+function tokensTab(d) {
+  const live = d.tokens.filter((t) => !t.revoked), revoked = d.tokens.filter((t) => t.revoked);
+  let h = '<h1>Tokens</h1><p class="lede">Lane tokens let CI, preview builds and agent environments use lanes. People get their own by signing in with GitHub.</p>' +
+    '<div class="card pad"><div class="row"><input id="tname" placeholder="Name it for where it lives: github-actions, vercel, claude-cloud" style="flex:1;min-width:240px"><button id="mint">Mint token</button></div>';
+  if (NEWTOKEN) h += '<div class="note ok"><b>' + esc(NEWTOKEN.person) + '</b> is ready. Copy it now: it won\'t be shown again.<div class="secret"><input id="newtok" readonly value="' + esc(NEWTOKEN.token) + '"><button class="ghost" data-copyval="' + esc(NEWTOKEN.token) + '">Copy</button></div>' +
+    '<p class="sub" style="margin-bottom:0">Store it as <code>LANE_TOKEN</code> (or <code>LANE_DEPLOYER_TOKEN</code> for the GitHub Action) next to <code>LANE_URL</code> = <code>' + esc(d.settings.siteUrl || location.origin) + '</code>.</p></div>';
+  h += '<div class="row" style="margin-top:10px"><span class="sub">Suggested:</span>' + ["github-actions", "vercel", "claude-cloud", "codex-cloud", "cursor-agents"].filter((n) => !live.some((t) => t.person === n))
+    .map((n) => '<button class="small ghost" data-suggest="' + n + '">' + n + '</button>').join("") + '</div></div>';
+  h += '<h2>Active · ' + live.length + '</h2>' + tokenTable(live, true);
+  if (revoked.length) h += '<details style="margin-top:18px"><summary class="sub" style="cursor:pointer">Revoked · ' + revoked.length + '</summary>' + tokenTable(revoked, false) + '</details>';
+  return h;
+}
+function tokenTable(rows, active) {
+  if (!rows.length) return '<div class="card empty">' + (active ? "No active tokens." : "") + '</div>';
+  return '<div class="card tablewrap"><table><tr><th>Name</th><th>Kind</th><th>Created</th><th class="hide-sm">By</th><th class="hide-sm">Last sign-in</th><th></th></tr>' +
+    rows.map((t) => {
+      const kind = (t.createdBy || "").startsWith("github:") ? "person · GitHub" : !t.createdBy ? "person · CLI" : "machine";
+      return '<tr class="' + (t.revoked ? "off" : "") + '"><td><b>' + esc(t.person) + '</b></td><td class="sub">' + kind + '</td><td class="sub">' + ago(t.createdAt) + '</td><td class="hide-sm sub">' + esc((t.createdBy || "–").replace(/^github:/, "")) + '</td>' +
+      '<td class="hide-sm sub">' + (t.lastSignIn ? ago(t.lastSignIn) : "–") + '</td><td style="text-align:right">' + (t.revoked ? '<span class="sub">revoked' + (t.revokedBy ? " by " + esc(t.revokedBy) : "") + ' ' + ago(t.revokedAt) + '</span>' :
+      '<button class="small danger" data-revoke="' + esc(t.id) + '" data-name="' + esc(t.person) + '">Revoke</button>') + '</td></tr>';
+    }).join("") + '</table></div>';
+}
+
+// ---------------------------------------------------------------- Repos
+function reposTab(d) {
+  let h = '<h1>Repos</h1><p class="lede">A registered repo gets a lane per branch, created as a dev deployment in its Convex project.</p>' +
+    '<div class="card pad"><b>Register a repo</b><div class="row" style="margin-top:8px"><input id="nrepo" placeholder="owner/name" style="flex:1;min-width:180px"><input id="nproj" placeholder="Convex project id" inputmode="numeric" style="width:170px"><button id="addrepo">Register</button></div>' +
+    '<p class="help">The project id is in the Convex dashboard under Project settings. Use a project in the team whose token lane-control holds.</p></div>';
+  const deliveries = d.onboarding.repos;
+  for (const r of d.repos) {
+    const facts = deliveries.find((x) => x.repo === r.repo) || {};
+    const allow = Object.entries(r.laneEnvAllow).map(([k, v]) => k + " = " + v).join("\n");
+    const gh = facts.machinePush || (facts.lastDelivery && facts.lastDelivery.ok) ? pill("ok", "GitHub connected") : facts.lastDelivery ? pill("bad", "GitHub: failing") : pill("off", "GitHub not connected");
+    h += '<h2></h2><div class="card repo" data-repo="' + esc(r.repo) + '">' +
+      '<div class="head"><b class="grow"><a href="https://github.com/' + esc(r.repo) + '" target="_blank" rel="noopener" style="color:inherit">' + esc(r.repo) + '</a></b>' + gh + '<span class="pill">' + r.openLanes + ' open lane' + (r.openLanes === 1 ? "" : "s") + '</span></div>' +
+      field("Convex project", "Where lanes are created", '<input data-k="convexProjectId" value="' + esc(r.convexProjectId) + '" inputmode="numeric" style="width:160px">') +
+      field("Setup functions", "Run once per lane", '<input data-k="setupFunctions" value="' + esc(r.setupFunctions.join(", ")) + '" placeholder="migrations:run, seed:run" style="width:100%"><div class="help">Run in order after a lane\'s first deploy: migrations, then the seed. Comma-separated <code>module:function</code>.</div>') +
+      field("Deploy args", "Optional", '<input data-k="deployArgs" value="' + esc(r.deployArgs.join(" ")) + '" placeholder="--typecheck disable" style="width:100%"><div class="help">Extra <code>convex deploy</code> arguments, space-separated.</div>') +
+      field("Grace period", "After archive", '<input data-k="graceDays" value="' + esc(+(r.graceMs / DAY).toFixed(3)) + '" inputmode="decimal" style="width:90px"> <span class="sub">days</span><div class="help">How long an archived lane\'s deployment is kept, so reopening its PR is instant.</div>') +
+      field("Per-lane env", "Vars a lane may set", '<textarea data-k="laneEnvAllow" rows="' + Math.max(2, Object.keys(r.laneEnvAllow).length + 1) + '" placeholder="SITE_URL = https://app-git-[a-z0-9-]+-team\\.vercel\\.app">' + esc(allow) + '</textarea><div class="help">One <code>NAME = pattern</code> per line. A lane sets these for itself with <code>lane env</code>, and the value must match the pattern in full.</div>') +
+      field("", "", '<button data-save="' + esc(r.repo) + '">Save changes</button>') +
+      field("Lane env", "Secrets for every lane", '<div class="chips">' + (r.envNames.length ? r.envNames.map((n) => '<span class="pill mono">' + esc(n) + ' <a href="#" data-unset="' + esc(n) + '" title="Remove" class="faint">×</a></span>').join("") : '<span class="sub">None yet</span>') + '</div>' +
+        '<div class="row" style="margin-top:8px"><input data-envname placeholder="NAME" style="width:200px"><input data-envvalue type="password" placeholder="value" style="flex:1;min-width:160px"><button class="ghost" data-setenv="' + esc(r.repo) + '">Set</button></div>' +
+        '<div class="help">Set on every new lane (API keys, JWT keys). Values are write-only. Lanes that already exist keep the env they started with.</div>') +
+      '</div>';
+  }
+  return h;
+}
+function field(label, hint, inner) { return '<div class="field"><label>' + esc(label) + (hint ? '<span class="sub">' + esc(hint) + '</span>' : '') + '</label><div>' + inner + '</div></div>'; }
+
+// ---------------------------------------------------------------- Settings
+const SETTING_DEFS = [
+  { name: "LANE_ADMIN_GITHUB_USERS", label: "Admins", hint: "Can use this panel", list: "admins", placeholder: "alice, bob" },
+  { name: "LANE_ALLOWED_GITHUB_ORGS", label: "Allowed orgs", hint: "Members may sign in", list: "allowedOrgs", placeholder: "your-org" },
+  { name: "LANE_ALLOWED_GITHUB_USERS", label: "Allowed users", hint: "May sign in", list: "allowedUsers", placeholder: "carol, dave" },
+  { name: "GITHUB_CLIENT_ID", label: "GitHub OAuth client ID", hint: "For sign-in", value: "clientIdValue", placeholder: "Ov23li…" },
+  { name: "GITHUB_CLIENT_SECRET", label: "GitHub OAuth client secret", hint: "Write-only", secret: "githubSignIn" },
+  { name: "GITHUB_WEBHOOK_SECRET", label: "Webhook secret", hint: "Signs GitHub deliveries", secret: "webhookSecret", generate: true },
+];
+function settingsTab(d) {
+  const s = d.settings;
+  let h = '<h1>Settings</h1><p class="lede">Who can use lanes, and how lane-control talks to GitHub. Changes apply within a few seconds.</p>';
+  if (!s.editable) h += '<div class="note">Read-only here: lane-control can\'t change its own settings ' + (s.teamToken ? "outside Convex cloud" : "until <code>CONVEX_TEAM_TOKEN</code> is set") + '. Change them in ' + DASH + '.</div>';
+  h += '<h2>Access</h2><div class="card">';
+  for (const f of SETTING_DEFS.slice(0, 3)) h += setting(f, s[f.list].join(", "), s.editable);
+  h += '</div><h2>GitHub</h2><div class="card">';
+  for (const f of SETTING_DEFS.slice(3)) h += setting(f, f.value ? (s[f.value] || "") : null, s.editable, f.secret ? !!s[f.secret] : false);
+  h += '</div>';
+  if (SECRET) h += '<div class="note ok">New webhook secret, shown once. Paste it into each repo\'s webhook on GitHub.<div class="secret"><input readonly value="' + esc(SECRET) + '"><button class="ghost small" data-copyval="' + esc(SECRET) + '">Copy</button></div></div>';
+  h += '<h2>Convex</h2><div class="card">' +
+    field("Team token", "Creates lanes", pill(s.teamToken ? "on" : "off", s.teamToken ? "set" : "missing") + '<div class="help">Set <code>CONVEX_TEAM_TOKEN</code> in ' + DASH + '. It stays there: it is what lets this page change the settings above.</div>') +
+    field("Deployment", "This lane-control", '<span class="mono">' + esc(s.deployment || "local or unknown") + '</span>' + (s.deployment ? ' <a href="https://dashboard.convex.dev/d/' + esc(s.deployment) + '/settings/environment-variables" target="_blank" rel="noopener">Open in Convex ↗</a>' : '')) +
+    '</div>';
+  return h;
+}
+function setting(f, value, editable, isSet) {
+  let inner;
+  if (f.secret) {
+    inner = '<div class="row">' + pill(isSet ? "on" : "off", isSet ? "set" : "not set") +
+      (editable ? '<input type="password" data-setting="' + f.name + '" placeholder="' + (isSet ? "Replace…" : "Paste value") + '" style="flex:1;min-width:180px"><button class="ghost small" data-savesetting="' + f.name + '">Save</button>' +
+        (f.generate ? '<button class="ghost small" data-gensecret>Generate</button>' : '') : '') + '</div>';
+  } else {
+    inner = editable ? '<div class="row"><input data-setting="' + f.name + '" value="' + esc(value) + '" placeholder="' + esc(f.placeholder || "") + '" style="flex:1;min-width:200px"><button class="ghost small" data-savesetting="' + f.name + '">Save</button></div>'
+      : (value ? '<span class="mono">' + esc(value) + '</span>' : '<span class="sub">none</span>');
+  }
+  return field(f.label, f.hint, inner + '<div class="help mono faint" style="font-size:11px">' + f.name + '</div>');
+}
+
+// ---------------------------------------------------------------- Activity
+function activityTab(d) {
+  let h = '<h1>Activity</h1><p class="lede">What GitHub has sent lane-control, and who signed in. Use it to debug a webhook that isn\'t landing.</p>';
+  h += '<h2>Webhook deliveries</h2>';
+  if (!d.deliveries.length) h += '<div class="card empty"><b>No deliveries yet</b>Add the webhook from <a href="#" data-tab="start">Get started</a>. GitHub sends a ping as soon as it is saved.</div>';
+  else h += '<div class="card tablewrap"><table><tr><th>Event</th><th>Result</th><th class="hide-sm">Repo</th><th>When</th></tr>' +
+    d.deliveries.map((x) => '<tr><td class="mono">' + esc(x.event) + '</td><td>' + pill(x.ok ? "ok" : "bad", x.note) + '</td><td class="hide-sm sub">' + esc(x.repo || "–") + '</td><td class="sub">' + ago(x.at) + '</td></tr>').join("") + '</table></div>';
+  h += '<h2>Sign-ins</h2><div class="card tablewrap"><table><tr><th>Who</th><th>Via</th><th>When</th></tr>' +
+    (d.signIns.length ? d.signIns.map((l) => '<tr><td>' + esc(l.person) + '</td><td class="sub">' + esc(l.via) + '</td><td class="sub">' + ago(l.at) + '</td></tr>').join("") : '<tr><td colspan="3" class="sub">No sign-ins yet</td></tr>') + '</table></div>';
+  return h;
+}
+
+// ---------------------------------------------------------------- Docs
+function docsTab(d) {
+  const site = d.settings.siteUrl || location.origin;
+  const sec = [["concepts", "Concepts"], ["lifecycle", "Lifecycle"], ["cli", "CLI"], ["agents", "Agents"], ["previews", "Previews"], ["security", "Security"], ["faq", "FAQ"]];
+  const cmd = (c, t) => '<tr><td><code>' + esc(c) + '</code></td><td class="sub">' + t + '</td></tr>';
+  const vendor = (name, where) => '<tr><td><b>' + name + '</b></td><td class="sub">' + where + '</td></tr>';
+  return '<h1>Docs</h1><p class="lede">How lanes work, and how to put people, agents and previews on them.</p><div class="docs"><nav class="toc">' +
+    sec.map(([k, l]) => '<a href="#" data-doc="' + k + '">' + l + '</a>').join("") + '</nav><article>' +
+    '<h2 id="doc-concepts">Concepts</h2>' +
+    '<p>A <b>lane</b> is one cloud backend for one branch: a Convex dev deployment in the repo\'s project, seeded by its setup functions. Everyone on the branch (you, your agents, CI and the preview build) uses the same lane, so data and schema stay consistent across them.</p>' +
+    '<ul><li><b>Lane-control</b> (this app) creates lanes, holds the Convex team token, and hands out short-lived keys scoped to one lane.</li>' +
+    '<li><b>Tokens</b> say who is calling: a person (from GitHub sign-in) or a machine (minted here).</li>' +
+    '<li><b>The deployer</b> pushes backend code to a lane under a lock, so two agents never deploy over each other.</li>' +
+    '<li><b>The lane page</b> shows who is on a lane, what is deployed, and recent activity.</li></ul>' +
+    '<h2 id="doc-lifecycle">Lifecycle</h2>' +
+    '<div class="flow"><div><b>Requested</b>PR opened, first push, or <code>lane up</code></div><div><b>Provisioning</b>Deployment created, env set, setup functions run</div><div><b>Ready</b>Every push touching <code>convex/</code> redeploys</div><div><b>Archived</b>PR merged or closed: keys revoked at once</div><div><b>Deleted</b>After the grace period (default 3 days)</div></div>' +
+    '<p>Reopening a PR within the grace period brings the same deployment back instantly. After that, a new lane is provisioned from scratch.</p>' +
+    '<h2 id="doc-cli">CLI</h2><p>Install once, then run from any checkout of a registered repo:</p>' + snip("npm install -g github:mwufi/lane-tools\nlane login --url " + site) +
+    '<div class="card tablewrap"><table class="cmds">' +
+    cmd("lane join --task \"…\"", "Create or reuse this branch's lane, deploy HEAD, write <code>.env.local</code>, and show this agent on the lane page") +
+    cmd("lane status", "State, URLs, deployed vs HEAD, who else is on the lane") +
+    cmd("lane push", "<code>git push</code>, then redeploy if <code>convex/</code> changed and wait until live") +
+    cmd("lane wait", "Block until the pushed HEAD is live (for preview builds)") +
+    cmd("lane env NAME=value", "Set an allow-listed var on this lane, such as its preview URL") +
+    cmd("lane key", "Mint a 4-hour deploy key for this lane") +
+    cmd("lane doctor", "Check URL, token, network and whether the repo is registered") +
+    cmd("lane down", "Archive this lane now") +
+    '</table></div>' +
+    '<h2 id="doc-agents">Agents</h2><p>Any agent that can run a shell can use lanes. For each environment: mint a token on the <a href="#" data-tab="tokens">Tokens</a> tab, store it as the secret <code>LANE_TOKEN</code> with <code>LANE_URL</code> = <code>' + esc(site) + '</code>, and install the CLI in its setup script. The agent then runs <code>lane join --task "…"</code> when it starts on a branch.</p>' +
+    '<div class="card tablewrap"><table>' +
+    vendor("Claude Code", "Cloud environment settings: secrets and setup script. Locally, <code>lane login</code>.") +
+    vendor("Codex", "Environment settings: secrets and setup script.") +
+    vendor("Cursor background agents", "<code>.cursor/environment.json</code> install step, secrets in Cursor settings.") +
+    vendor("Amp", "Workspace secrets and setup script.") +
+    vendor("Anything else", "Set <code>LANE_URL</code> and <code>LANE_TOKEN</code>, install the CLI, run <code>lane join</code>.") +
+    '</table></div><p>The <code>skills/lane-setup</code> skill in lane-tools teaches an agent the whole workflow; add it to your agent instructions.</p>' +
+    '<h2 id="doc-previews">Previews</h2><p>Preview builds (Vercel, Netlify) should build against their branch\'s lane, not production. Give the preview build a machine token, then in the build: <code>lane wait</code> for the commit to be live, use the lane\'s URL as the backend, and optionally <code>lane env SITE_URL=$PREVIEW_URL</code> so the backend knows its own front end. Allow that var per repo on the <a href="#" data-tab="repos">Repos</a> tab.</p>' +
+    '<h2 id="doc-security">Security</h2><ul>' +
+    '<li>Only lane-control holds the Convex team token. Put lanes in a team that does not own production.</li>' +
+    '<li>Keys handed to people and agents are scoped to one lane deployment and expire (4 hours by default). Archiving a lane revokes them at once.</li>' +
+    '<li>Tokens are stored hashed. Revoking one cuts off everything using it on its next call.</li>' +
+    '<li>Webhook deliveries are checked against <code>GITHUB_WEBHOOK_SECRET</code>; anything else is refused and shows on the Activity tab.</li></ul>' +
+    '<h2 id="doc-faq">FAQ</h2><div class="faq">' +
+    '<details><summary>A lane failed to start. What now?</summary><p>Its error is on the Lanes tab. The usual causes are a team token without access to the repo\'s Convex project, or a setup function that throws on an empty database. Fix it, then press Retry.</p></details>' +
+    '<details><summary>Pushes don\'t reach lanes.</summary><p>Open Activity. No deliveries means the webhook isn\'t added or points at the wrong URL. A refused delivery says why, usually a secret mismatch. If deliveries are fine but lanes don\'t redeploy, check the lane deployer Action run in the repo.</p></details>' +
+    '<details><summary>Can I keep using <code>npx convex dev</code>?</summary><p>Yes. <code>lane join</code> writes the lane\'s URL and a deploy key to <code>.env.local</code>, so <code>npx convex dev</code> pushes to your branch\'s lane instead of a personal deployment.</p></details>' +
+    '<details><summary>How much does a lane cost?</summary><p>A lane is a Convex dev deployment, billed like any other in that team. Lanes are deleted after merge plus the grace period, so idle branches don\'t pile up.</p></details>' +
+    '<details><summary>Who can create lanes?</summary><p>Anyone with a lane token: people allowed to sign in (Settings) and machine tokens you mint. Only admins see this panel.</p></details>' +
+    '</div></article></div>';
+}
+
+// ---------------------------------------------------------------- actions
+function wire() {
+  const on = (sel, fn) => document.querySelectorAll(sel).forEach((el) => el.onclick = (e) => { e.preventDefault(); fn(el); });
+  on("[data-archive]", async (b) => { const [repo, branch] = b.dataset.archive.split("|");
+    if (await ask("Archive " + branch + "?", "Its keys are revoked now and its deployment is deleted after the grace period. A push or reopened PR brings it back.", "Archive", true))
+      act(b, () => api("/api/admin/lanes/archive", { repo, branch }), "Archived " + branch); });
+  on("[data-retry]", (b) => { const [repo, branch] = b.dataset.retry.split("|");
+    act(b, () => api("/api/admin/lanes/retry", { repo, branch }), "Re-provisioning " + branch + ". This takes about a minute."); });
+  on("[data-revoke]", async (b) => { if (await ask("Revoke " + b.dataset.name + "?", "Anything using this token stops working on its next call. This can't be undone.", "Revoke", true)) { NEWTOKEN = null; act(b, () => api("/api/admin/tokens/revoke", { id: b.dataset.revoke }), "Revoked " + b.dataset.name); } });
+  on("[data-suggest]", (b) => { $("#tname").value = b.dataset.suggest; $("#tname").focus(); });
+  const mint = (b) => act(b, async () => { NEWTOKEN = await api("/api/admin/tokens/create", { person: $("#tname").value.trim() }); return NEWTOKEN; }, (r) => "Minted " + r.person);
+  on("#mint", mint);
+  if ($("#tname")) $("#tname").onkeydown = (e) => { if (e.key === "Enter") mint($("#mint")); };
+  on("[data-copyval]", (b) => { navigator.clipboard?.writeText(b.dataset.copyval); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); });
+  on("#addrepo", (b) => act(b, () => api("/api/admin/repos/add", { repo: $("#nrepo").value.trim(), convexProjectId: Number($("#nproj").value) }), "Registered " + $("#nrepo").value.trim() + ". Next: connect GitHub from Get started."));
+  on("[data-save]", (b) => {
+    const card = b.closest(".repo"), get = (k) => card.querySelector('[data-k="' + k + '"]').value.trim();
+    const allow = {};
+    for (const line of get("laneEnvAllow").split("\n")) { const t = line.trim(); if (!t) continue;
+      const i = t.indexOf("="); if (i < 1) return toast("Per-lane env lines look like NAME = pattern", true);
+      allow[t.slice(0, i).trim()] = t.slice(i + 1).trim(); }
+    act(b, () => api("/api/admin/repos/update", {
+      repo: card.dataset.repo,
+      convexProjectId: Number(get("convexProjectId")),
+      setupFunctions: get("setupFunctions").split(",").map((x) => x.trim()).filter(Boolean),
+      deployArgs: get("deployArgs").split(/\s+/).filter(Boolean),
+      graceMs: Math.round(Number(get("graceDays")) * DAY),
+      laneEnvAllow: allow,
+    }), "Saved " + card.dataset.repo);
+  });
+  on("[data-setenv]", (b) => { const card = b.closest(".repo");
+    const name = card.querySelector("[data-envname]").value.trim(), value = card.querySelector("[data-envvalue]").value;
+    act(b, () => api("/api/admin/repos/env", { repo: card.dataset.repo, name, value }), "Set " + name + " for new lanes of " + card.dataset.repo); });
+  on("[data-unset]", async (a) => { const card = a.closest(".repo");
+    if (await ask("Remove " + a.dataset.unset + "?", "New lanes of " + card.dataset.repo + " won't get it. Lanes that already exist keep it.", "Remove", true))
+      act(null, () => api("/api/admin/repos/env", { repo: card.dataset.repo, name: a.dataset.unset, value: null }), "Removed " + a.dataset.unset); });
+  on("[data-savesetting]", (b) => { const name = b.dataset.savesetting, input = document.querySelector('[data-setting="' + name + '"]');
+    act(b, () => api("/api/admin/settings", { name, value: input.value.trim() || null }), "Saved. It takes effect in a few seconds."); });
+  on("[data-gensecret]", async (b) => {
+    if (DATA.settings.webhookSecret && !(await ask("Replace the webhook secret?", "Webhooks using the old secret are refused until you paste the new one into them on GitHub.", "Generate new secret", true))) return;
+    act(b, async () => { const r = await api("/api/admin/settings", { name: "GITHUB_WEBHOOK_SECRET", generate: true }); SECRET = r.generated; return r; }, "New webhook secret generated. Copy it into GitHub.");
+  });
+  on("[data-lf]", (b) => { FILTER.state = b.dataset.lf; render(); });
+  const lq = $("#lq"); if (lq) lq.oninput = () => { FILTER.q = lq.value; const pos = lq.selectionStart; render(); const n = $("#lq"); n.focus(); n.setSelectionRange(pos, pos); };
+  on("[data-doc]", (a) => document.getElementById("doc-" + a.dataset.doc)?.scrollIntoView({ behavior: "smooth" }));
+}
+
+load();
+</script>
+</body>
+</html>
