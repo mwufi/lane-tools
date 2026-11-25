@@ -554,9 +554,16 @@ async function deploy(repo, branch) {
       const setup = claim.setupFunctions || (claim.seedFunction ? [claim.seedFunction] : []);
       if (setup.length) {
         const tSeed = Date.now();
-        for (const fn of setup) run("npx", ["convex", "run", fn], dir, env);
+        const url = (await getLane(repo, branch)).lane.deploymentUrl;
+        const slow = [];
+        for (const fn of setup) {
+          const t = Date.now();
+          if (!(url && (await callFunction(url, claim.deployKey, fn)))) run("npx", ["convex", "run", fn], dir, env);
+          slow.push(`${fn} ${secs(Date.now() - t)}`);
+        }
         seeded = true;
         detail += `, setup (${setup.length} fn) ${secs(Date.now() - tSeed)}`;
+        if (setup.length > 1) log(`  setup: ${slow.join(", ")}`);
       }
       // `convex deploy` regenerates convex/_generated; don't leave that diff in someone's checkout.
       if (inPlace) git(["checkout", "--", "convex/_generated"], { cwd: repoRoot });
@@ -580,6 +587,28 @@ async function deploy(repo, branch) {
     if (!fin.again) return true;
     log(`  branch moved during deploy; deploying newest HEAD`);
   }
+}
+
+// Run one setup function the way `npx convex run` does (POST /api/function with the deploy
+// key as admin auth), without starting the Convex CLI each time: that start-up dominated
+// repos with many setup functions. Returns false when the CLI should do it instead.
+async function callFunction(deploymentUrl, deployKey, fn) {
+  if (!/^[\w/.-]+:[\w]+$/.test(fn)) return false; // e.g. "seed" or args: leave to the CLI
+  let res;
+  try {
+    res = await fetch(deploymentUrl.replace(/\/$/, "") + "/api/function", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Convex ${deployKey}` },
+      body: JSON.stringify({ path: fn, args: {}, format: "convex_encoded_json" }),
+    });
+  } catch {
+    return false;
+  }
+  if (!res.ok && res.status !== 560) return false;
+  const out = await res.json().catch(() => null);
+  if (!out) return false;
+  if (out.status === "success") return true;
+  throw new Error(`setup function ${fn} failed: ${out.errorMessage || JSON.stringify(out).slice(0, 500)}`);
 }
 
 function run(bin, argv, cwd, env) {
