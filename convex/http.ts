@@ -133,7 +133,18 @@ async function loginWithGithub(ctx: ActionCtx, accessToken: string, label: strin
 route("/api/auth/config", "GET", async () => ({
   githubClientId: process.env.GITHUB_CLIENT_ID ?? null,
   webLogin: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+  // Where an admin ticks "Enable Device Flow", which `lane login` needs.
+  githubAppSettings: githubAppSettingsUrl(),
 }));
+
+function githubAppSettingsUrl() {
+  const slug = process.env.GITHUB_APP_SLUG;
+  if (!slug) return null;
+  const owner = process.env.GITHUB_APP_OWNER ?? "";
+  return owner.startsWith("org:")
+    ? `https://github.com/organizations/${owner.slice(4)}/settings/apps/${slug}`
+    : `https://github.com/settings/apps/${slug}`;
+}
 
 // The CLI finished GitHub's device flow and hands us the GitHub token once.
 route("/api/auth/github", "POST", async (ctx, req) => {

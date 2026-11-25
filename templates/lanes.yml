@@ -1,0 +1,44 @@
+# .github/workflows/lanes.yml: runs a repo's lanes from GitHub Actions, no GitHub app or webhook needed.
+# Pushes that touch the backend create or redeploy the branch's lane; closing the PR or deleting the
+# branch archives it. Needs the Actions secret LANE_DEPLOYER_TOKEN and the variable LANE_URL.
+# Pushes that land mid-deploy collapse into one follow-up deploy of the newest HEAD.
+name: lanes
+on:
+  push:
+    branches-ignore: [main]
+    paths: ["convex/**", "package-lock.json"]
+  pull_request:
+    types: [closed]
+  delete:
+concurrency:
+  group: lane-${{ github.event.pull_request.head.ref || (github.event_name == 'delete' && github.event.ref) || github.ref_name }}
+  cancel-in-progress: false
+env:
+  LANE_URL: ${{ vars.LANE_URL }}
+  LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}
+  LANE_DEPLOYER: github-actions
+jobs:
+  # Create the branch's lane if needed, record the push, deploy it.
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npx -y github:mwufi/lane-tools up
+  # PR merged or closed, or branch deleted: archive the lane.
+  archive:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'delete' && github.event.ref_type == 'branch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npx -y github:mwufi/lane-tools down --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" --reason "$REASON"
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref || github.event.ref }}
+          REASON: ${{ github.event_name == 'delete' && 'branch deleted' || 'PR closed' }}

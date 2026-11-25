@@ -227,7 +227,7 @@ let TOKEN = token();
 let TAB = (location.hash.match(/tab=(\w+)/) || [])[1] || "start";
 const NOTICE = (() => { const g = location.hash.match(/github=created/), e = location.hash.match(/error=([^&]+)/);
   if (g || e) history.replaceState(null, "", location.pathname + "#tab=" + TAB);
-  return g ? { ok: true, msg: "GitHub app created. Next: install it on your repos." } : e ? { ok: false, msg: decodeURIComponent(e[1]) } : null; })();
+  return g ? { ok: true, msg: "GitHub app created. For lane login, also tick Enable Device Flow in its settings (see Get started)." } : e ? { ok: false, msg: decodeURIComponent(e[1]) } : null; })();
 let DATA = null, LAST = "", NEWTOKEN = null, SECRET = null, PREFILL = null, FILTER = { q: "", state: "open" };
 const OPEN = new Set(); // which Get started steps the viewer opened or closed by hand
 const CLOSED = new Set();
@@ -403,9 +403,9 @@ function steps(d) {
       done: d.convexTeams.length > 0 || s.teamToken,
       detail: d.convexTeams.length ? d.convexTeams.map((t) => t.label).join(", ") : s.teamToken ? "Using the CONVEX_TEAM_TOKEN env var" : "No Convex team yet",
       how: teamForm() },
-    { id: "github", title: "Connect GitHub",
+    { id: "github", title: "Connect GitHub", optional: true,
       done: !!s.githubApp || s.githubSignIn,
-      detail: s.githubApp ? "GitHub app " + s.githubApp.slug + " · sign-in open to " + whoCanSignIn(s) : s.githubSignIn ? "GitHub sign-in set up (OAuth app) · open to " + whoCanSignIn(s) : "One click: creates a GitHub app for sign-in and push events",
+      detail: s.githubApp ? "GitHub app " + s.githubApp.slug + " · sign-in open to " + whoCanSignIn(s) : s.githubSignIn ? "GitHub sign-in set up (OAuth app) · open to " + whoCanSignIn(s) : "For GitHub sign-in (this panel, lane login). Lanes run without it through the GitHub Action",
       how: s.githubApp ? appHow(s) : githubConnect(s) },
   ]});
   if (!o.repos.length) {
@@ -422,18 +422,20 @@ function steps(d) {
       { id: r.repo + ":seed", title: "Seed every new lane", optional: true, done: r.setup > 0,
         detail: r.setup > 0 ? r.setup + " setup function" + (r.setup === 1 ? "" : "s") + " run once per lane" : "New lanes start empty",
         how: '<p>Add setup functions (migrations, then a seed such as <code>seed:run</code>) so every lane starts with sample data.</p>' + go("repos", "Edit " + r.repo, null, true) },
-      { id: r.repo + ":github", title: "Connect GitHub", done: ghDone, warn: !!(r.lastDelivery && !r.lastDelivery.ok),
+      { id: r.repo + ":github", title: "Pushes reach Lanes", done: ghDone, warn: !!(r.lastDelivery && !r.lastDelivery.ok),
         detail: r.machinePush ? "Pushes arrive from " + r.machinePush.actor + " (" + ago(r.machinePush.at) + ")" :
           hookOk ? "Webhook delivering (" + ago(r.lastDelivery.at) + ")" :
-          r.lastDelivery ? r.lastDelivery.note : "Nothing from GitHub yet",
+          r.lastDelivery ? r.lastDelivery.note : "Add the lanes GitHub Action (no app needed)",
         how: githubHow(d, r) },
       { id: r.repo + ":live", title: "First lane live", done: r.everLive, warn: !r.everLive && !!r.failed,
         detail: r.live ? r.live.branch + " is live" + (r.lanes > 1 ? " · " + r.lanes + " open lanes" : "") : r.everLive ? "Lanes have deployed before" : r.failed ? "Failed on " + r.failed.branch : r.lanes ? "Starting…" : "No lane yet",
-        how: '<p>Open a PR or push a branch that changes <code>convex/</code>. Or from a checkout of the repo:</p>' + snip("npm install -g github:mwufi/lane-tools\nlane login --url " + site + "\nlane join --task \"try lanes\"") +
+        how: '<p>Open a PR or push a branch that changes <code>convex/</code>. Or from a checkout of the repo:</p>' + (s.githubApp || s.githubSignIn
+            ? snip("npm install -g github:mwufi/lane-tools\nlane login --url " + site + "\nlane join --task \"try lanes\"")
+            : '<p class="sub">Without GitHub sign-in, use a token: ' + go("tokens", "Mint a token", null, true) + ', then:</p>' + snip("npm install -g github:mwufi/lane-tools\nexport LANE_URL=" + site + " LANE_TOKEN=<your token>\nlane join --task \"try lanes\"")) +
           (r.failed ? '<p class="bad">' + esc(r.failed.error || "Provisioning failed") + '</p><button class="small" data-retry="' + esc(r.repo) + '|' + esc(r.failed.branch) + '">Retry ' + esc(r.failed.branch) + '</button>' : '') },
       { id: r.repo + ":down", title: "First lane wound down after a merge", done: r.archived,
         detail: r.archived ? "Merged lanes clean themselves up" : "Merge or close a PR whose branch has a lane",
-        how: '<p>With GitHub connected, merging or closing the PR archives its lane: keys are revoked at once and the deployment is deleted after the grace period.</p>' },
+        how: '<p>With the lanes Action (or the GitHub app), merging or closing the PR archives its lane: keys are revoked at once and the deployment is deleted after the grace period.</p>' },
     ]});
   }
   groups.push({ id: "team", group: "Bring your team and agents", items: [
@@ -464,23 +466,36 @@ function githubHow(d, r) {
     ? '<li><b>Events</b>: <a href="https://github.com/apps/' + esc(s.githubApp.slug) + '/installations/new" target="_blank" rel="noopener">install the Lanes GitHub app on ' + esc(r.repo) + '</a>. Pushes and pull requests then reach Lanes on their own.' +
       (status || '<p class="sub">Waiting for the first event from this repo.</p>') + '</li>'
     : null;
-  return '<ol>' + (hookStep ||
-    '<li><b>Webhook</b>, so pushes and merges reach lane-control. <a href="' + repoUrl + '/settings/hooks/new" target="_blank" rel="noopener">Add it on GitHub</a> with content type <code>application/json</code>, events <b>Pushes</b> and <b>Pull requests</b>, and payload URL:' + snip(site + "/github/webhook") + secretStep +
+  const webhookStep = '<b>A webhook</b>: <a href="' + repoUrl + '/settings/hooks/new" target="_blank" rel="noopener">add it on GitHub</a> with content type <code>application/json</code>, events <b>Pushes</b> and <b>Pull requests</b>, and payload URL:' + snip(site + "/github/webhook") + secretStep +
       (last ? '<p>' + pill(last.ok ? "ok" : "bad", last.ok ? "Last delivery OK" : "Last delivery failed") + ' <span class="sub">' + esc(last.note) + ' · ' + ago(last.at) + '</span></p>' :
-        '<p class="sub">Waiting for a delivery. GitHub sends a ping as soon as you save the webhook.</p>') + '</li>') +
-    '<li><b>Deployer</b>, so each push redeploys its lane. Mint a token ' + go("tokens", "Mint github-actions token", "github-actions", true) + ' and add it on GitHub as the Actions secret <code>LANE_DEPLOYER_TOKEN</code>, with the variable <code>LANE_URL</code> =' + snip(site) + ' (<a href="' + repoUrl + '/settings/secrets/actions" target="_blank" rel="noopener">open Actions secrets</a>)</li>' +
-    '<li>Commit these two files:' + snip(".lane.json\n" + JSON.stringify({ repo: r.repo, url: site }, null, 2)) + snip(DEPLOYER_YML) + '</li></ol>';
+        '<p class="sub">GitHub sends a ping as soon as you save the webhook.</p>');
+  return '<p>A GitHub Action in the repo runs its lanes: it creates and deploys a branch\'s lane on pushes that touch the backend, and archives it when the PR closes or the branch is deleted. No GitHub app needed.</p><ol>' +
+    '<li>Mint a token ' + go("tokens", "Mint github-actions token", "github-actions", true) + ' and add it on GitHub as the Actions secret <code>LANE_DEPLOYER_TOKEN</code>, with the variable <code>LANE_URL</code> =' + snip(site) + ' (<a href="' + repoUrl + '/settings/secrets/actions" target="_blank" rel="noopener">open Actions secrets</a>)</li>' +
+    '<li>Commit these two files:' + snip(".lane.json\n" + JSON.stringify({ repo: r.repo, url: site }, null, 2)) + snip(DEPLOYER_YML) + '</li></ol>' +
+    '<details class="alt"><summary>Optional: GitHub events too</summary><p class="sub">Lanes can also hear pushes and PRs straight from GitHub, so the lane page shows every push, not just backend ones. Not needed with the Action.</p>' +
+    (hookStep ? '<ol>' + hookStep + '</ol>' : '<p>' + webhookStep + '</p>') + '</details>';
 }
 
-const DEPLOYER_YML = ".github/workflows/lane-deployer.yml\n" + [
-  "name: lane deployer",
+const DEPLOYER_YML = ".github/workflows/lanes.yml\n" + [
+  "name: lanes",
   "on:",
   "  push:",
   "    branches-ignore: [main]",
   "    paths: [\"convex/**\", \"package-lock.json\"]",
-  "concurrency: { group: \"lane-${{ github.ref }}\", cancel-in-progress: false }",
+  "  pull_request:",
+  "    types: [closed]",
+  "  delete:",
+  "concurrency:",
+  "  group: lane-${{ github.event.pull_request.head.ref || (github.event_name == 'delete' && github.event.ref) || github.ref_name }}",
+  "  cancel-in-progress: false",
+  "env:",
+  "  LANE_URL: ${{ vars.LANE_URL }}",
+  "  LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}",
+  "  LANE_DEPLOYER: github-actions",
   "jobs:",
+  "  # Create the branch's lane if needed, record the push, deploy it.",
   "  deploy:",
+  "    if: github.event_name == 'push'",
   "    runs-on: ubuntu-latest",
   "    steps:",
   "      - uses: actions/checkout@v4",
@@ -488,11 +503,20 @@ const DEPLOYER_YML = ".github/workflows/lane-deployer.yml\n" + [
   "      - uses: actions/setup-node@v4",
   "        with: { node-version: 22 }",
   "      - run: npm ci",
-  "      - run: npx -y github:mwufi/lane-tools deploy",
+  "      - run: npx -y github:mwufi/lane-tools up",
+  "  # PR merged or closed, or branch deleted: archive the lane.",
+  "  archive:",
+  "    if: >-",
+  "      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||",
+  "      (github.event_name == 'delete' && github.event.ref_type == 'branch')",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - uses: actions/setup-node@v4",
+  "        with: { node-version: 22 }",
+  "      - run: npx -y github:mwufi/lane-tools down --repo \"$GITHUB_REPOSITORY\" --branch \"$BRANCH\" --reason \"$REASON\"",
   "        env:",
-  "          LANE_URL: ${{ vars.LANE_URL }}",
-  "          LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}",
-  "          LANE_DEPLOYER: github-actions",
+  "          BRANCH: ${{ github.event.pull_request.head.ref || github.event.ref }}",
+  "          REASON: ${{ github.event_name == 'delete' && 'branch deleted' || 'PR closed' }}",
 ].join("\n");
 
 function whoCanSignIn(s) {
@@ -729,7 +753,7 @@ function docsTab(d) {
     '<p>Everything after the first deploy happens on this site. No terminal, no dashboard settings:</p><ol>' +
     '<li><b>Claim the install.</b> The first visit asks for your GitHub username and lane-control\'s deploy key. The key proves you own this install and lets you change its settings here.</li>' +
     '<li><b>Connect a Convex team.</b> Paste an access token for the team your app\'s project lives in. Lanes uses it only to create that team\'s lane deployments. Connect several teams if your repos live in different ones.</li>' +
-    '<li><b>Connect GitHub.</b> One click creates a private GitHub app: sign-in for your team, plus push and pull request events. Install it on your repos.</li>' +
+    '<li><b>Connect GitHub (optional).</b> One click creates a private GitHub app: sign-in for your team and <code>lane login</code>, plus push and pull request events. Lanes run without it through the GitHub Action.</li>' +
     '<li><b>Register a repo</b> and pick its Convex project. Add setup functions so every lane starts seeded.</li>' +
     '<li><b>Add the deployer</b> to the repo: a token from the Tokens tab as an Actions secret, plus two small files Get started shows you.</li></ol>' +
     '<p>Admins, who may sign in, and the GitHub and Convex connections can all be changed later under Settings.</p>' +
