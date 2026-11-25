@@ -58,6 +58,7 @@ lane status                              # URLs, deployed vs HEAD, other agents,
 git commit -am "..." && lane push        # backend change: deploys and waits until live (~1 min on big apps)
 lane push                                # frontend-only change: no deploy, instant
 lane wait                                # if someone else pushed, wait for HEAD to be live
+lane run seed:run '{"n":5}'              # run a function on the lane (seed data, a migration)
 lane key                                 # 4h key for this lane only, saved to .lane/deploy-key, for `npx convex run`
 lane leave                               # mark yourself done on the lane page
 ```

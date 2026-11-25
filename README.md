@@ -14,6 +14,7 @@ lane status                              # URLs, deployed vs HEAD, other agents,
 git push                                 # the lane follows the branch: convex/ changed -> redeploy
 lane wait --sha HEAD                     # block until your commit is live
 lane key                                 # 4h deploy key scoped to this lane (.lane/deploy-key)
+lane run seed:run '{"n":5}'               # run a Convex function on this branch's lane
 lane leave / lane down                   # done / archive the lane (deployment deleted after grace)
 ```
 

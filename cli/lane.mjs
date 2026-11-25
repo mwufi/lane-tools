@@ -15,7 +15,8 @@ Usage: lane <command> [options]
 
   login [--url <url>] [--print]      Sign in with GitHub; saves your lane token (--print: for cloud envs)
   init --url <url> [--token-stdin]   Set up with a token you already have (no repo changes)
-  doctor                  Check node, URL, token, network and whether this repo is registered
+  doctor [--url <url>]    Check node, URL, token, network and whether this repo is registered
+  run <fn> [json args]    Run a Convex function on this branch's lane, e.g. lane run seed:run '{"n":5}' 
   push [git args]         git push, then redeploy the lane if convex/ changed and wait until live
   up                      Create or reuse this branch's lane, deploy the pushed HEAD, write .env.local
   join --task "..."       up, then register this agent on the lane page (vendor/thread auto-detected)
@@ -320,6 +321,12 @@ async function push() {
 async function login() {
   const url = (typeof args.url === "string" ? args.url : LANE_URL).replace(/\/$/, "");
   if (!url) die("pass --url https://<your lane-control>.convex.site the first time");
+  if (!args.print) {
+    // Remember the control plane even if sign-in fails, so `lane doctor` and `lane init` know it.
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    const cfgPath = path.join(CONFIG_DIR, "config.json");
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...readJson(cfgPath), url }, null, 2) + "\n");
+  }
   const cfg = await (await fetch(url + "/api/auth/config")).json();
   const tokenPath = `or skip GitHub: an admin mints a token at ${url}/admin (Tokens), then set LANE_URL=${url} and LANE_TOKEN (or run lane init --url ${url} --token-stdin < token-file)`;
   if (!cfg.githubClientId) die(`GitHub login isn't set up on this lane-control yet; ${tokenPath}`);
@@ -592,14 +599,14 @@ async function deploy(repo, branch) {
 // Run one setup function the way `npx convex run` does (POST /api/function with the deploy
 // key as admin auth), without starting the Convex CLI each time: that start-up dominated
 // repos with many setup functions. Returns false when the CLI should do it instead.
-async function callFunction(deploymentUrl, deployKey, fn) {
+async function callFunction(deploymentUrl, deployKey, fn, fnArgs = {}) {
   if (!/^[\w/.-]+:[\w]+$/.test(fn)) return false; // e.g. "seed" or args: leave to the CLI
   let res;
   try {
     res = await fetch(deploymentUrl.replace(/\/$/, "") + "/api/function", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Convex ${deployKey}` },
-      body: JSON.stringify({ path: fn, args: {}, format: "convex_encoded_json" }),
+      body: JSON.stringify({ path: fn, args: fnArgs, format: "convex_encoded_json" }),
     });
   } catch {
     return false;
@@ -607,8 +614,8 @@ async function callFunction(deploymentUrl, deployKey, fn) {
   if (!res.ok && res.status !== 560) return false;
   const out = await res.json().catch(() => null);
   if (!out) return false;
-  if (out.status === "success") return true;
-  throw new Error(`setup function ${fn} failed: ${out.errorMessage || JSON.stringify(out).slice(0, 500)}`);
+  if (out.status === "success") return { value: out.value };
+  throw new Error(`${fn} failed: ${out.errorMessage || JSON.stringify(out).slice(0, 500)}`);
 }
 
 function run(bin, argv, cwd, env) {
@@ -665,7 +672,36 @@ async function key() {
   if (args.print) return console.log(res.key);
   writeState("deploy-key", res.key + "\n", 0o600);
   log(`Deploy key for ${branch} saved to ${path.join(stateDir, "deploy-key")} (expires ${new Date(res.expiresAt).toISOString()})`);
-  log(`Use it with: CONVEX_DEPLOY_KEY=$(cat .lane/deploy-key) npx convex run <fn>`);
+  log(`Use it with: CONVEX_DEPLOY_KEY=$(cat .lane/deploy-key) npx convex <command>  (to run a function: lane run <fn>)`);
+}
+
+// One step instead of `lane key` + `CONVEX_DEPLOY_KEY=... npx convex run`: mints a short
+// lane key and runs the function on this branch's lane. Prints the result as JSON.
+async function runFn() {
+  const repo = repoId();
+  const branch = branchName();
+  const fn = args._[1];
+  if (!fn || !/^[\w/.-]+:[\w]+$/.test(fn)) die('usage: lane run <module:function> [json args], e.g. lane run seed:run \'{"n":5}\'');
+  let fnArgs = {};
+  if (args._[2] !== undefined) {
+    try {
+      fnArgs = JSON.parse(String(args._[2]));
+    } catch {
+      die(`args must be JSON, e.g. '{"n":5}' (got ${args._[2]})`);
+    }
+  }
+  const v = await getLane(repo, branch);
+  if (!v.lane.deploymentUrl || v.lane.state !== "ready") die(`${branch}'s lane is ${v.lane.state}; run lane join first`);
+  const holder = process.env.LANE_PERSON ? `${detectAgent().vendor}/${process.env.LANE_PERSON}` : detectAgent().vendor;
+  const { key } = await api("POST", "/api/lane/key", { repo, branch, holder });
+  let res;
+  try {
+    res = await callFunction(v.lane.deploymentUrl, key, fn, fnArgs);
+  } catch (e) {
+    die(e.message);
+  }
+  if (!res) die(`couldn't reach ${v.lane.deploymentUrl} to run ${fn}`);
+  console.log(JSON.stringify(res.value ?? null, null, 2));
 }
 
 async function env() {
@@ -735,7 +771,7 @@ const commands = {
   login,
   push,
   init,
-  doctor: () => doctor(),
+  doctor: () => doctor({ url: typeof args.url === "string" ? args.url.replace(/\/$/, "") : undefined }),
   join,
   status,
   list,
@@ -747,6 +783,7 @@ const commands = {
   },
   deploy: () => deploy(repoId(), branchName()),
   key,
+  run: runFn,
   heartbeat: () => heartbeat(),
   leave: () => heartbeat("done"),
   env,
