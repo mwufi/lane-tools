@@ -63,6 +63,15 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
    also set as `GITHUB_WEBHOOK_SECRET` on lane-control, events "Pushes" and "Pull requests". A merged or closed PR
    archives its lane (keys revoked at once, backend deleted after the repo's grace period, 3 days by default).
 
+### Admin panel
+
+`https://<lane-control>.convex.site/admin` does the day-to-day admin work from the browser: mint and
+revoke tokens, register repos and edit their setup functions, deploy args, grace period, per-lane env
+allowlist and lane env (values are write-only), archive lanes, and see who can sign in. Admins are the
+GitHub logins in `LANE_ADMIN_GITHUB_USERS` on lane-control. They sign in with GitHub (or a token minted
+for their login once with `admin:createToken`). Deployment env vars themselves (allowlists, OAuth app,
+team token) are still set in the Convex dashboard; the panel shows them read-only.
+
 ### Deploying lane-control
 
 Merges to `main` that touch `convex/` deploy it automatically

@@ -5,19 +5,19 @@ import { sha256Hex } from "./lib/crypto";
 
 /** `npx convex run admin:createToken '{"person":"zen"}'` prints a new token once. */
 export const createToken = internalAction({
-  args: { person: v.string() },
+  args: { person: v.string(), createdBy: v.optional(v.string()) },
   returns: v.string(),
-  handler: async (ctx, { person }) => {
+  handler: async (ctx, { person, createdBy }) => {
     const bytes = new Uint8Array(24);
     crypto.getRandomValues(bytes);
     const token = "lane_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    await ctx.runMutation(internal.admin.storeToken, { hash: await sha256Hex(token), person });
+    await ctx.runMutation(internal.admin.storeToken, { hash: await sha256Hex(token), person, createdBy });
     return token;
   },
 });
 
 export const storeToken = internalMutation({
-  args: { hash: v.string(), person: v.string() },
+  args: { hash: v.string(), person: v.string(), createdBy: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     await ctx.db.insert("tokens", { ...args, revoked: false });

@@ -35,6 +35,9 @@ export default defineSchema({
     hash: v.string(),
     person: v.string(),
     revoked: v.boolean(),
+    createdBy: v.optional(v.string()), // who minted it (admin panel, GitHub sign-in, or CLI admin)
+    revokedBy: v.optional(v.string()),
+    revokedAt: v.optional(v.number()),
   }).index("by_hash", ["hash"]),
 
   // Audit trail of GitHub sign-ins (who, CLI or web, when).
