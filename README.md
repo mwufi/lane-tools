@@ -65,7 +65,11 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 
 ### Admin panel
 
-`https://<lane-control>.convex.site/admin` does the day-to-day admin work from the browser: mint and
+`https://<lane-control>.convex.site/admin` opens on **Get started**, a checklist that checks itself
+from what lane-control has seen (Convex connected, a repo registered, pushes arriving from GitHub,
+first lane live, first agent, first lane wound down after a merge) and shows the next step with
+copy-paste values for your install. A fresh install with no admins shows the two-minute bootstrap.
+The other tabs do the day-to-day admin work: mint and
 revoke tokens, register repos and edit their setup functions, deploy args, grace period, per-lane env
 allowlist and lane env (values are write-only), archive lanes, and see who can sign in. Admins are the
 GitHub logins in `LANE_ADMIN_GITHUB_USERS` on lane-control. They sign in with GitHub (or a token minted
