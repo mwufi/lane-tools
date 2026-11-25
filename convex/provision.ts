@@ -76,7 +76,11 @@ export const provision = internalAction({
 
 /** Set allow-listed env vars on a ready lane's deployment with a one-use env-write key. */
 export const setLaneEnv = internalAction({
-  args: { deploymentName: v.string(), deploymentUrl: v.string(), vars: v.record(v.string(), v.string()) },
+  args: {
+    deploymentName: v.string(),
+    deploymentUrl: v.string(),
+    vars: v.record(v.string(), v.union(v.string(), v.null())), // null removes
+  },
   returns: v.null(),
   handler: async (_ctx, { deploymentName, deploymentUrl, vars }) => {
     const keyName = `lane-env-${Date.now().toString(36)}`;

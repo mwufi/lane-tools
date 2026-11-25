@@ -75,7 +75,7 @@ export async function deleteDeployKey(deploymentName: string, name: string): Pro
 export async function setDeploymentEnv(
   deploymentUrl: string,
   adminKey: string,
-  env: Record<string, string>,
+  env: Record<string, string | null>, // null removes the variable
 ): Promise<void> {
   const changes = Object.entries(env).map(([name, value]) => ({ name, value }));
   if (changes.length === 0) return;

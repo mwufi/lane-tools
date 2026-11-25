@@ -40,6 +40,16 @@ export default defineSchema({
     revokedAt: v.optional(v.number()),
   }).index("by_hash", ["hash"]),
 
+  // Recent GitHub webhook deliveries, so the admin panel can show whether GitHub is connected
+  // and why a delivery was refused. Pruned to the newest 200.
+  webhookDeliveries: defineTable({
+    event: v.string(),
+    repo: v.optional(v.string()),
+    ok: v.boolean(),
+    note: v.string(),
+    at: v.number(),
+  }),
+
   // Audit trail of GitHub sign-ins (who, CLI or web, when).
   logins: defineTable({ person: v.string(), via: v.string(), at: v.number() }),
 

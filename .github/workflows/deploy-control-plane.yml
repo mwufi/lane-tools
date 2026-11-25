@@ -41,6 +41,9 @@ jobs:
           cache: npm
       - if: steps.key.outputs.on == 'true'
         run: npm ci
+      - name: Check generated pages are current
+        if: steps.key.outputs.on == 'true'
+        run: npm run build:pages -- --check
       - name: Deploy
         if: steps.key.outputs.on == 'true'
         run: npx convex deploy

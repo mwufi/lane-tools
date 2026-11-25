@@ -259,12 +259,13 @@ route("/api/admin/me", "GET", async (ctx, req) => {
 
 route("/api/admin/overview", "GET", async (ctx, req) => {
   const person = await admin(ctx, req);
-  const [tokens, repos, lanes, signIns, onboarding] = await Promise.all([
+  const [tokens, repos, lanes, signIns, onboarding, deliveries] = await Promise.all([
     ctx.runQuery(internal.adminPanel.tokens, {}),
     ctx.runQuery(internal.adminPanel.repos, {}),
     ctx.runQuery(internal.lanes.list, { now: Date.now() }),
     ctx.runQuery(internal.adminPanel.signIns, {}),
     ctx.runQuery(internal.adminPanel.onboarding, {}),
+    ctx.runQuery(internal.adminPanel.deliveries, {}),
   ]);
   return {
     person,
@@ -273,8 +274,13 @@ route("/api/admin/overview", "GET", async (ctx, req) => {
     lanes,
     signIns,
     onboarding,
-    // Deployment env vars can only be changed in the Convex dashboard; shown here read-only.
+    deliveries,
     settings: {
+      // Admins edit these from the Settings tab when lane-control can write its own env
+      // (it has a team token and runs on Convex cloud); otherwise the tab says where to.
+      editable: selfDeployment() !== null,
+      deployment: selfDeployment()?.name ?? null,
+      clientIdValue: process.env.GITHUB_CLIENT_ID ?? null, // public by design (it is in the OAuth URL)
       admins: admins(),
       allowedUsers: csv("LANE_ALLOWED_GITHUB_USERS"),
       allowedOrgs: csv("LANE_ALLOWED_GITHUB_ORGS"),
@@ -349,6 +355,64 @@ route("/api/admin/lanes/archive", "POST", async (ctx, req) => {
     reason: "archived from the admin panel",
   });
   return res ?? { alreadyDown: true };
+});
+
+route("/api/admin/lanes/retry", "POST", async (ctx, req) => {
+  const person = await admin(ctx, req);
+  const b = await body(req);
+  return await ctx.runMutation(internal.lanes.ensure, { repo: str(b, "repo"), branch: str(b, "branch"), actor: person });
+});
+
+// lane-control's own deployment, when it can change its own env vars: it runs on Convex
+// cloud (CONVEX_CLOUD_URL names the deployment) and holds the team token.
+function selfDeployment(): { name: string; url: string } | null {
+  const url = process.env.CONVEX_CLOUD_URL ?? "";
+  const m = /^https:\/\/([a-z0-9-]+)\.convex\.cloud\/?$/.exec(url);
+  if (!m || !process.env.CONVEX_TEAM_TOKEN) return null;
+  return { name: m[1], url: url.replace(/\/$/, "") };
+}
+
+const SETTINGS: Record<string, { csv?: boolean; secret?: boolean }> = {
+  LANE_ADMIN_GITHUB_USERS: { csv: true },
+  LANE_ALLOWED_GITHUB_USERS: { csv: true },
+  LANE_ALLOWED_GITHUB_ORGS: { csv: true },
+  GITHUB_CLIENT_ID: {},
+  GITHUB_CLIENT_SECRET: { secret: true },
+  GITHUB_WEBHOOK_SECRET: { secret: true },
+};
+
+route("/api/admin/settings", "POST", async (ctx, req) => {
+  const person = await admin(ctx, req);
+  const b = await body(req);
+  const name = str(b, "name");
+  const spec = SETTINGS[name];
+  if (!spec) throw new HttpError(400, `${name} can't be changed here`);
+  let value: string | null;
+  let generated: string | undefined;
+  if (b.generate === true && name === "GITHUB_WEBHOOK_SECRET") {
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    value = generated = Array.from(bytes, (x) => x.toString(16).padStart(2, "0")).join("");
+  } else if (b.value === null || b.value === "") {
+    value = null;
+  } else if (typeof b.value === "string" && b.value.length <= 2000) {
+    value = b.value.trim();
+  } else {
+    throw new HttpError(400, '"value" must be a string, or null to remove');
+  }
+  if (spec.csv && value !== null) {
+    const items = value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (items.some((x) => !/^[a-z0-9-]{1,39}$/.test(x))) throw new HttpError(400, "use GitHub logins or org names, separated by commas");
+    value = Array.from(new Set(items)).join(",") || null;
+  }
+  if (name === "LANE_ADMIN_GITHUB_USERS" && !(value ?? "").split(",").includes(person.toLowerCase())) {
+    throw new HttpError(400, `You can't remove yourself as an admin. Ask another admin, or change it in the Convex dashboard.`);
+  }
+  const self = selfDeployment();
+  if (!self) {
+    throw new HttpError(409, "lane-control can't change its own settings here (no CONVEX_TEAM_TOKEN, or not on Convex cloud). Set it in the Convex dashboard under Settings, Environment Variables.");
+  }
+  await ctx.runAction(internal.provision.setLaneEnv, { deploymentName: self.name, deploymentUrl: self.url, vars: { [name]: value } });
+  return { ok: true, name, set: value !== null, generated };
 });
 
 // ---------------------------------------------------------------- lanes
@@ -563,68 +627,84 @@ http.route({
   path: "/github/webhook",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
+    const event = req.headers.get("x-github-event") ?? "unknown";
+    let repo: string | undefined;
+    // Every delivery is logged (event, repo, outcome) so the admin panel can say whether
+    // GitHub is connected and, if not, why.
+    const done = async (status: number, data: unknown, note: string) => {
+      await ctx.runMutation(internal.adminPanel.logDelivery, { event, repo, ok: status < 300, note });
+      return json(data, status);
+    };
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const raw = await req.text();
     const sig = req.headers.get("x-hub-signature-256") ?? "";
-    if (!secret || !timingSafeEqual(sig, "sha256=" + (await hmacSha256Hex(secret, raw)))) {
-      return json({ error: "bad signature" }, 401);
+    if (!secret) return await done(401, { error: "webhooks are not set up" }, "Refused: GITHUB_WEBHOOK_SECRET is not set on lane-control");
+    if (!timingSafeEqual(sig, "sha256=" + (await hmacSha256Hex(secret, raw)))) {
+      return await done(401, { error: "bad signature" }, "Refused: the webhook's secret doesn't match GITHUB_WEBHOOK_SECRET");
     }
     let p: Record<string, any>;
     try {
       p = JSON.parse(raw);
     } catch {
-      return json({ error: "bad json" }, 400);
+      return await done(400, { error: "bad json" }, "Refused: body isn't JSON (set the content type to application/json)");
     }
-    const event = req.headers.get("x-github-event");
-    const repo: unknown = p.repository?.full_name;
-    if (typeof repo !== "string") return json({ ignored: "no repository" });
-
-    if (event === "push" && typeof p.ref === "string" && p.ref.startsWith("refs/heads/")) {
-      const branch = p.ref.slice("refs/heads/".length);
-      if (p.deleted === true) {
-        return json(await ctx.runMutation(internal.lanes.archive, { repo, branch, actor: "github", reason: "branch deleted" }));
+    if (typeof p.repository?.full_name === "string") repo = p.repository.full_name;
+    if (event === "ping") return await done(200, { ok: true }, "Webhook connected");
+    if (!repo) return await done(200, { ignored: "no repository" }, "Ignored: no repository in the payload");
+    const registered = await ctx.runQuery(internal.admin.repoConfig, { repo });
+    if (!registered) return await done(200, { ignored: "repo not registered" }, `Ignored: ${repo} isn't registered on lane-control`);
+    try {
+      if (event === "push" && typeof p.ref === "string" && p.ref.startsWith("refs/heads/")) {
+        const branch = p.ref.slice("refs/heads/".length);
+        if (p.deleted === true) {
+          const res = await ctx.runMutation(internal.lanes.archive, { repo, branch, actor: "github", reason: "branch deleted" });
+          return await done(200, res, `Branch ${branch} deleted: lane archived`);
+        }
+        const commits: Array<Record<string, unknown>> = Array.isArray(p.commits) ? p.commits : [];
+        const touched = commits.flatMap((c) =>
+          ["added", "modified", "removed"].flatMap((k) => (Array.isArray(c[k]) ? (c[k] as string[]) : [])),
+        );
+        // GitHub truncates commit lists past 20 commits; treat that as "maybe changed".
+        const convexChanged = commits.length >= 20 || touched.some((f) => f.startsWith("convex/"));
+        const res = await ctx.runMutation(internal.lanes.push, {
+          repo,
+          branch,
+          sha: String(p.after),
+          convexChanged,
+          actor: `github/${p.pusher?.name ?? "unknown"}`,
+        });
+        // The lane deployer (a GitHub Action on the same push) does the deploy itself.
+        return await done(200, res, res.lane ? `Push to ${branch} (${String(p.after).slice(0, 7)}) recorded` : `Push to ${branch}: no lane for this branch (lanes start when a PR opens)`);
       }
-      const commits: Array<Record<string, unknown>> = Array.isArray(p.commits) ? p.commits : [];
-      const touched = commits.flatMap((c) =>
-        ["added", "modified", "removed"].flatMap((k) => (Array.isArray(c[k]) ? (c[k] as string[]) : [])),
-      );
-      // GitHub truncates commit lists past 20 commits; treat that as "maybe changed".
-      const convexChanged = commits.length >= 20 || touched.some((f) => f.startsWith("convex/"));
-      const res = await ctx.runMutation(internal.lanes.push, {
-        repo,
-        branch,
-        sha: String(p.after),
-        convexChanged,
-        actor: `github/${p.pusher?.name ?? "unknown"}`,
-      });
-      // The lane deployer (a GitHub Action on the same push) does the deploy itself.
-      return json(res);
-    }
-    if (event === "pull_request") {
-      const branch: unknown = p.pull_request?.head?.ref;
-      if (typeof branch !== "string") return json({ ignored: "no head ref" });
-      if (p.action === "opened" || p.action === "reopened") {
-        return json(
-          await ctx.runMutation(internal.lanes.ensure, {
+      if (event === "pull_request") {
+        const branch: unknown = p.pull_request?.head?.ref;
+        if (typeof branch !== "string") return await done(200, { ignored: "no head ref" }, "Ignored: pull request without a head branch");
+        if (p.action === "opened" || p.action === "reopened") {
+          const res = await ctx.runMutation(internal.lanes.ensure, {
             repo,
             branch,
             headSha: p.pull_request?.head?.sha,
             actor: `github/${p.sender?.login ?? "unknown"}`,
-          }),
-        );
-      }
-      if (p.action === "closed") {
-        return json(
-          await ctx.runMutation(internal.lanes.archive, {
+          });
+          return await done(200, res, `PR ${p.action} on ${branch}: lane ${res.created ? "created" : "kept"}`);
+        }
+        if (p.action === "closed") {
+          const merged = !!p.pull_request?.merged;
+          const res = await ctx.runMutation(internal.lanes.archive, {
             repo,
             branch,
             actor: `github/${p.sender?.login ?? "unknown"}`,
-            reason: p.pull_request?.merged ? "PR merged" : "PR closed",
-          }),
-        );
+            reason: merged ? "PR merged" : "PR closed",
+          });
+          return await done(200, res, `PR ${merged ? "merged" : "closed"} on ${branch}: lane ${res ? "archived" : "already down"}`);
+        }
+        return await done(200, { ignored: p.action }, `Ignored: pull request ${p.action}`);
       }
+      return await done(200, { ignored: event }, `Ignored: ${event} events aren't used`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.replace(/^Uncaught Error: /, "").split("\n")[0] : String(e);
+      return await done(500, { error: msg }, `Failed: ${msg}`);
     }
-    return json({ ignored: event });
   }),
 });
 

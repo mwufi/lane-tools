@@ -65,16 +65,29 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 
 ### Admin panel
 
-`https://<lane-control>.convex.site/admin` opens on **Get started**, a checklist that checks itself
-from what lane-control has seen (Convex connected, a repo registered, pushes arriving from GitHub,
-first lane live, first agent, first lane wound down after a merge) and shows the next step with
-copy-paste values for your install. A fresh install with no admins shows the two-minute bootstrap.
-The other tabs do the day-to-day admin work: mint and
-revoke tokens, register repos and edit their setup functions, deploy args, grace period, per-lane env
-allowlist and lane env (values are write-only), archive lanes, and see who can sign in. Admins are the
-GitHub logins in `LANE_ADMIN_GITHUB_USERS` on lane-control. They sign in with GitHub (or a token minted
-for their login once with `admin:createToken`). Deployment env vars themselves (allowlists, OAuth app,
-team token) are still set in the Convex dashboard; the panel shows them read-only.
+`https://<lane-control>.convex.site/admin` is the product's home. Signed out, it explains lanes and
+offers GitHub sign-in; a fresh install with no admins shows the two-step bootstrap. Signed in as an
+admin (a GitHub login in `LANE_ADMIN_GITHUB_USERS`), it has:
+
+- **Get started**: a checklist that ticks itself, live, from what lane-control has seen. Global steps
+  (Convex connected, GitHub sign-in), then one card per repo (registered, seeded, GitHub connected,
+  first lane live, first lane wound down after a merge), then team steps (first agent, previews).
+  Each open step has copy-paste values for your install and buttons that do the step.
+- **Lanes**: filter, open, archive, and **Retry** failed lanes (the error is shown inline).
+- **Repos**: register repos, edit setup functions, deploy args, grace period, per-lane env allowlist,
+  and write-only lane env.
+- **Tokens**: mint (shown once) and revoke machine tokens.
+- **Settings**: admins, allowed orgs/users, GitHub OAuth app and webhook secret (with Generate).
+  These are lane-control's own env vars; the panel writes them through the Convex API using
+  `CONVEX_TEAM_TOKEN`, which is the one value that must be set in the Convex dashboard. Without it
+  (or on a local backend) the tab is read-only and says where to change them. You can't remove
+  yourself as an admin.
+- **Activity**: every GitHub webhook delivery and what happened to it (connected, refused and why,
+  ignored, lane created or archived), plus sign-ins.
+- **Docs**: concepts, lifecycle, CLI, per-vendor agent setup, previews, security, FAQ.
+
+The page is `ui/admin.html`, plain HTML. Run `npm run build:pages` after editing it to regenerate
+`convex/adminPage.ts` (`npm run build:pages -- --check` fails if that file is stale).
 
 ### Deploying lane-control
 

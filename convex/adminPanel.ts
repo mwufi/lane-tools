@@ -167,11 +167,19 @@ export const onboarding = internalQuery({
     const events = await ctx.db.query("laneEvents").order("desc").take(3000);
     const logins = await ctx.db.query("logins").order("desc").take(1);
 
-    // Tokens made for machines (CI, Vercel, agent envs), not by someone signing in with GitHub.
-    const machineTokens = tokens.filter((t) => !t.revoked && !(t.createdBy ?? "").startsWith("github:"));
+    // Tokens made for machines (CI, Vercel, agent envs): minted from the admin panel or CLI
+    // for a non-person name. Tokens from a GitHub sign-in, and the CLI bootstrap token
+    // (no createdBy), belong to people.
+    const machineTokens = tokens.filter(
+      (t) => !t.revoked && t.createdBy !== undefined && !t.createdBy.startsWith("github:") && t.person !== t.createdBy.replace(/^admin:/, ""),
+    );
     const machineNames = new Set(["github", "github-actions", ...machineTokens.map((t) => t.person)]);
+    const isMachine = (actor: string) => machineNames.has(actor) || actor.startsWith("github/");
     const pushes = events.filter((e) => e.type === "push");
-    const githubPush = pushes.find((e) => machineNames.has(e.actor));
+    const githubPush = pushes.find((e) => isMachine(e.actor));
+    const deliveries = await ctx.db.query("webhookDeliveries").order("desc").take(200);
+    const goodDelivery = deliveries.find((d) => d.ok);
+    const lastDelivery = deliveries[0];
     const live = lanes.filter((l) => l.deployedSha);
     const failed = lanes.find((l) => l.state === "failed");
     const archived = events.find((e) => e.type === "archived");
@@ -181,13 +189,34 @@ export const onboarding = internalQuery({
       const l = laneId ? laneById.get(laneId as never) : undefined;
       return l ? `${l.repo} · ${l.branch}` : null;
     };
+    const laneIds = (repo: string) => new Set(lanes.filter((l) => l.repo === repo).map((l) => l._id as string));
     return {
-      repos: repos.map((r) => ({
-        repo: r.repo,
-        convexProjectId: r.convexProjectId,
-        setup: (r.setupFunctions ?? (r.seedFunction ? [r.seedFunction] : [])).length,
-        laneEnvAllow: Object.keys(r.laneEnvAllow ?? {}).length,
-      })),
+      repos: repos.map((r) => {
+        const mine = lanes.filter((l) => l.repo === r.repo);
+        const ids = laneIds(r.repo);
+        const pushOf = pushes.find((e) => ids.has(e.laneId) && isMachine(e.actor));
+        const hook = deliveries.find((d) => d.repo === r.repo);
+        const liveLane = mine.find((l) => l.deployedSha && l.state !== "archived" && l.state !== "deleted");
+        const failedLane = mine.find((l) => l.state === "failed");
+        return {
+          repo: r.repo,
+          convexProjectId: r.convexProjectId,
+          setup: (r.setupFunctions ?? (r.seedFunction ? [r.seedFunction] : [])).length,
+          laneEnvAllow: Object.keys(r.laneEnvAllow ?? {}).length,
+          lanes: mine.filter((l) => l.state !== "deleted" && l.state !== "archived").length,
+          live: liveLane ? { branch: liveLane.branch, url: liveLane.deploymentUrl ?? null } : null,
+          everLive: mine.some((l) => l.deployedSha),
+          failed: failedLane ? { branch: failedLane.branch, error: (failedLane.error ?? "").slice(0, 300) } : null,
+          archived: mine.some((l) => l.state === "archived" || l.state === "deleted"),
+          machinePush: pushOf ? { actor: pushOf.actor, at: pushOf.at } : null,
+          lastDelivery: hook ? { event: hook.event, ok: hook.ok, note: hook.note, at: hook.at } : null,
+        };
+      }),
+      webhook: {
+        secretSet: !!process.env.GITHUB_WEBHOOK_SECRET,
+        connected: goodDelivery ? { event: goodDelivery.event, at: goodDelivery.at, repo: goodDelivery.repo ?? null } : null,
+        last: lastDelivery ? { event: lastDelivery.event, ok: lastDelivery.ok, note: lastDelivery.note, at: lastDelivery.at } : null,
+      },
       machineTokens: machineTokens.map((t) => t.person),
       firstSignIn: logins[0] ? logins[0].person : null,
       githubPush: githubPush ? { actor: githubPush.actor, at: githubPush.at, where: where(githubPush.laneId) } : null,
@@ -200,4 +229,29 @@ export const onboarding = internalQuery({
       envSet: envSet ? { where: where(envSet.laneId) } : null,
     };
   },
+});
+
+/** Record one GitHub webhook delivery; keeps the newest 200. */
+export const logDelivery = internalMutation({
+  args: { event: v.string(), repo: v.optional(v.string()), ok: v.boolean(), note: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("webhookDeliveries", { ...args, note: args.note.slice(0, 500), at: Date.now() });
+    const old = await ctx.db.query("webhookDeliveries").order("desc").take(260);
+    for (const d of old.slice(200)) await ctx.db.delete("webhookDeliveries", d._id);
+    return null;
+  },
+});
+
+/** Recent webhook deliveries, newest first. */
+export const deliveries = internalQuery({
+  args: {},
+  handler: async (ctx) =>
+    (await ctx.db.query("webhookDeliveries").order("desc").take(50)).map((d) => ({
+      event: d.event,
+      repo: d.repo ?? null,
+      ok: d.ok,
+      note: d.note,
+      at: d.at,
+    })),
 });
