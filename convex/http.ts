@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { hmacSha256Hex, sha256Hex, timingSafeEqual } from "./lib/crypto";
 import { PAGE_HTML } from "./page";
+import { ADMIN_HTML } from "./adminPage";
 
 const http = httpRouter();
 
@@ -123,7 +124,7 @@ async function loginWithGithub(ctx: ActionCtx, accessToken: string, label: strin
       `${login} isn't allowed on this lane-control. An admin adds you to LANE_ALLOWED_GITHUB_USERS or LANE_ALLOWED_GITHUB_ORGS.`,
     );
   }
-  const token: string = await ctx.runAction(internal.admin.createToken, { person: login });
+  const token: string = await ctx.runAction(internal.admin.createToken, { person: login, createdBy: `github:${login}` });
   await ctx.runMutation(internal.admin.noteLogin, { person: login, via: label });
   return { token, person: login };
 }
@@ -147,11 +148,15 @@ async function signState(nonce: string): Promise<string> {
 http.route({
   path: "/auth/github/start",
   method: "GET",
-  handler: httpAction(async () => {
+  handler: httpAction(async (_ctx, req) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
       return new Response("GitHub sign-in isn't configured on this lane-control.", { status: 501 });
     }
-    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0")).join("");
+    // "-admin" in the (signed) nonce sends the browser back to the admin panel afterwards.
+    const toAdmin = new URL(req.url).searchParams.get("next") === "admin";
+    const nonce =
+      Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0")).join("") +
+      (toAdmin ? "-admin" : "");
     const u = new URL("https://github.com/login/oauth/authorize");
     u.searchParams.set("client_id", process.env.GITHUB_CLIENT_ID);
     u.searchParams.set("scope", "read:org");
@@ -190,7 +195,8 @@ http.route({
     try {
       const { token } = await loginWithGithub(ctx, j.access_token, "web");
       // The page reads the token from the fragment, keeps it in localStorage, and strips the URL.
-      return new Response(null, { status: 302, headers: { Location: `/#token=${token}` } });
+      const back = nonce.endsWith("-admin") ? "/admin" : "/";
+      return new Response(null, { status: 302, headers: { Location: `${back}#token=${token}` } });
     } catch (e) {
       return fail(e instanceof Error ? e.message : String(e));
     }
@@ -202,6 +208,139 @@ http.route({
 const page = httpAction(async () => new Response(PAGE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } }));
 http.route({ path: "/", method: "GET", handler: page });
 http.route({ path: "/lane", method: "GET", handler: page });
+http.route({
+  path: "/admin",
+  method: "GET",
+  handler: httpAction(async () => new Response(ADMIN_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } })),
+});
+
+// ---------------------------------------------------------------- admin panel
+// Admins are GitHub logins in LANE_ADMIN_GITHUB_USERS. They sign in like anyone else (GitHub on
+// the page, or a token minted for their login), and the routes below check the list each call.
+
+function admins(): string[] {
+  return csv("LANE_ADMIN_GITHUB_USERS");
+}
+
+async function admin(ctx: ActionCtx, req: Request): Promise<string> {
+  const person = await authed(ctx, req);
+  if (!admins().includes(person.toLowerCase())) {
+    throw new HttpError(403, `${person} is not a lane admin. An admin adds them to LANE_ADMIN_GITHUB_USERS on lane-control.`);
+  }
+  return person;
+}
+
+function num(b: Record<string, unknown>, k: string): number {
+  const val = b[k];
+  if (typeof val !== "number" || !Number.isFinite(val)) throw new HttpError(400, `"${k}" must be a number`);
+  return val;
+}
+
+function strList(b: Record<string, unknown>, k: string): string[] | undefined {
+  const val = b[k];
+  if (val === undefined) return undefined;
+  if (!Array.isArray(val) || val.some((x) => typeof x !== "string" || x.length === 0 || x.length > 200)) {
+    throw new HttpError(400, `"${k}" must be a list of strings`);
+  }
+  return val as string[];
+}
+
+route("/api/admin/me", "GET", async (ctx, req) => {
+  const person = await authed(ctx, req);
+  return { person, admin: admins().includes(person.toLowerCase()) };
+});
+
+route("/api/admin/overview", "GET", async (ctx, req) => {
+  const person = await admin(ctx, req);
+  const [tokens, repos, lanes, signIns] = await Promise.all([
+    ctx.runQuery(internal.adminPanel.tokens, {}),
+    ctx.runQuery(internal.adminPanel.repos, {}),
+    ctx.runQuery(internal.lanes.list, { now: Date.now() }),
+    ctx.runQuery(internal.adminPanel.signIns, {}),
+  ]);
+  return {
+    person,
+    tokens,
+    repos,
+    lanes,
+    signIns,
+    // Deployment env vars can only be changed in the Convex dashboard; shown here read-only.
+    settings: {
+      admins: admins(),
+      allowedUsers: csv("LANE_ALLOWED_GITHUB_USERS"),
+      allowedOrgs: csv("LANE_ALLOWED_GITHUB_ORGS"),
+      githubSignIn: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+      teamToken: !!process.env.CONVEX_TEAM_TOKEN,
+      webhookSecret: !!process.env.GITHUB_WEBHOOK_SECRET,
+      siteUrl: process.env.CONVEX_SITE_URL ?? null,
+    },
+  };
+});
+
+route("/api/admin/tokens/create", "POST", async (ctx, req) => {
+  const by = await admin(ctx, req);
+  const b = await body(req);
+  const person = str(b, "person");
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(person)) throw new HttpError(400, "name: letters, digits, . _ - (up to 64)");
+  // A token named after an admin would carry admin rights; admins get theirs by signing in.
+  if (admins().includes(person.toLowerCase())) throw new HttpError(400, `${person} is an admin login; sign in with GitHub instead`);
+  const token: string = await ctx.runAction(internal.admin.createToken, { person, createdBy: by });
+  return { person, token };
+});
+
+route("/api/admin/tokens/revoke", "POST", async (ctx, req) => {
+  const by = await admin(ctx, req);
+  const b = await body(req);
+  const id = str(b, "id") as Id<"tokens">;
+  return { revoked: await ctx.runMutation(internal.adminPanel.revokeToken, { id, by }) };
+});
+
+route("/api/admin/repos/add", "POST", async (ctx, req) => {
+  await admin(ctx, req);
+  const b = await body(req);
+  await ctx.runMutation(internal.adminPanel.addRepo, { repo: str(b, "repo"), convexProjectId: num(b, "convexProjectId") });
+  return { ok: true };
+});
+
+route("/api/admin/repos/update", "POST", async (ctx, req) => {
+  await admin(ctx, req);
+  const b = await body(req);
+  const allow = b.laneEnvAllow;
+  if (allow !== undefined && (typeof allow !== "object" || allow === null || Array.isArray(allow) ||
+      Object.values(allow).some((x) => typeof x !== "string"))) {
+    throw new HttpError(400, '"laneEnvAllow" must be an object of name -> pattern');
+  }
+  await ctx.runMutation(internal.adminPanel.updateRepo, {
+    repo: str(b, "repo"),
+    convexProjectId: b.convexProjectId === undefined ? undefined : num(b, "convexProjectId"),
+    setupFunctions: strList(b, "setupFunctions"),
+    deployArgs: strList(b, "deployArgs"),
+    graceMs: b.graceMs === undefined ? undefined : num(b, "graceMs"),
+    laneEnvAllow: allow as Record<string, string> | undefined,
+  });
+  return { ok: true };
+});
+
+route("/api/admin/repos/env", "POST", async (ctx, req) => {
+  await admin(ctx, req);
+  const b = await body(req);
+  const value = b.value === null ? null : typeof b.value === "string" && b.value.length <= 20_000 ? b.value : undefined;
+  if (value === undefined) throw new HttpError(400, '"value" must be a string, or null to remove');
+  await ctx.runMutation(internal.adminPanel.setRepoEnv, { repo: str(b, "repo"), name: str(b, "name"), value });
+  return { ok: true };
+});
+
+route("/api/admin/lanes/archive", "POST", async (ctx, req) => {
+  const person = await admin(ctx, req);
+  const b = await body(req);
+  const res = await ctx.runMutation(internal.lanes.archive, {
+    repo: str(b, "repo"),
+    branch: str(b, "branch"),
+    actor: person,
+    reason: "archived from the admin panel",
+  });
+  return res ?? { alreadyDown: true };
+});
 
 // ---------------------------------------------------------------- lanes
 
