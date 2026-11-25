@@ -65,6 +65,10 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 
 ### Deploying lane-control
 
+Merges to `main` that touch `convex/` deploy it automatically
+(`.github/workflows/deploy-control-plane.yml`) once the repo secret `LANE_CONTROL_DEPLOY_KEY`
+holds a production deploy key for the lane-control deployment. By hand:
+
 ```sh
 npm install
 CONVEX_DEPLOY_KEY=<control-plane prod key> npx convex deploy
