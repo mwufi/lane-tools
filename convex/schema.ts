@@ -126,6 +126,19 @@ export default defineSchema({
     at: v.number(),
   }).index("by_laneId", ["laneId"]),
 
+  // Seed snapshots: a ZIP export of a freshly seeded lane (`lane pool fill` makes them). A new
+  // lane imports the newest one instead of running every setup function. `tree` is the git tree
+  // of convex/ it was seeded from, so the filler knows when to make a fresh one.
+  seedSnapshots: defineTable({
+    repo: v.string(),
+    sha: v.string(),
+    tree: v.optional(v.string()),
+    storageId: v.id("_storage"),
+    bytes: v.number(),
+    createdBy: v.string(),
+    at: v.number(),
+  }).index("by_repo", ["repo"]),
+
   // Every key minted for a lane, so teardown can revoke them and the page can audit them.
   laneKeys: defineTable({
     laneId: v.id("lanes"),

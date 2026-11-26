@@ -19,6 +19,7 @@ import type * as lib_mgmt from "../lib/mgmt.js";
 import type * as page from "../page.js";
 import type * as pool from "../pool.js";
 import type * as provision from "../provision.js";
+import type * as seed from "../seed.js";
 
 import type {
   ApiFromModules,
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   page: typeof page;
   pool: typeof pool;
   provision: typeof provision;
+  seed: typeof seed;
 }>;
 
 /**

@@ -1,14 +1,15 @@
 # .github/workflows/lanes.yml: runs a repo's lanes from GitHub Actions, no GitHub app or webhook needed.
 # Pushes that touch the backend create or redeploy the branch's lane; closing the PR or deleting the
 # branch archives it. Needs the Actions secret LANE_DEPLOYER_TOKEN and the variable LANE_URL.
-# Pushes that land mid-deploy collapse into one follow-up deploy of the newest HEAD.
+# Pushes that land mid-deploy collapse into one follow-up deploy of the newest HEAD. Each PR gets one
+# lane status comment (backend, seed, lane page), kept up to date.
 name: lanes
 on:
   push:
     branches-ignore: [main]
     paths: ["convex/**", "package-lock.json"]
   pull_request:
-    types: [closed]
+    types: [opened, reopened, closed]
   delete:
 concurrency:
   group: lane-${{ github.event.pull_request.head.ref || (github.event_name == 'delete' && github.event.ref) || github.ref_name }}
@@ -17,6 +18,9 @@ env:
   LANE_URL: ${{ vars.LANE_URL }}
   LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}
   LANE_DEPLOYER: github-actions
+permissions:
+  contents: read
+  pull-requests: write # the lane status comment
 jobs:
   # Create the branch's lane if needed, record the push, deploy it.
   deploy:
@@ -29,10 +33,26 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci
       - run: npx -y github:mwufi/lane-tools up
+      - run: npx -y github:mwufi/lane-tools pr-status
+        if: always()
+        continue-on-error: true
+        env: { GITHUB_TOKEN: "${{ github.token }}" }
+  # PR opened or reopened: post the lane status comment (the lane exists if a push made one).
+  status:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npx -y github:mwufi/lane-tools pr-status --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" --pr "$PR"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
   # PR merged or closed, or branch deleted: archive the lane.
   archive:
     if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'delete' && github.event.ref_type == 'branch')
     runs-on: ubuntu-latest
     steps:

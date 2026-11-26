@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import {
   AGENT_ACTIONS,
   DEPLOYER_ACTIONS,
+  SEED_ACTIONS,
   createDeployKey,
   createDeployment,
   deleteDeployKey,
@@ -141,18 +142,18 @@ export const mintKey = internalAction({
     laneId: v.id("lanes"),
     deploymentName: v.string(),
     holder: v.string(),
-    purpose: v.union(v.literal("deployer"), v.literal("agent")),
+    purpose: v.union(v.literal("deployer"), v.literal("agent"), v.literal("seed")),
   },
   returns: v.object({ key: v.string(), expiresAt: v.number(), name: v.string() }),
   handler: async (ctx, args) => {
     const info = await ctx.runQuery(internal.lanes.getForProvision, { laneId: args.laneId });
     const token = info ? await repoToken(ctx, info.lane.repo) : undefined;
-    const ttlMs = args.purpose === "deployer" ? 31 * 60_000 : 4 * 60 * 60_000;
+    const ttlMs = args.purpose === "agent" ? 4 * 60 * 60_000 : 31 * 60_000;
     const name = `${args.purpose}-${slug(args.holder)}-${Date.now().toString(36)}`;
     const key = await createDeployKey(
       args.deploymentName,
       name,
-      args.purpose === "deployer" ? DEPLOYER_ACTIONS : AGENT_ACTIONS,
+      args.purpose === "deployer" ? DEPLOYER_ACTIONS : args.purpose === "seed" ? SEED_ACTIONS : AGENT_ACTIONS,
       ttlMs,
       token,
     );
