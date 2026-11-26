@@ -687,6 +687,33 @@ route("/api/lane/key", "POST", async (ctx, req) => {
   return minted;
 });
 
+// A 31-minute key that can import and replace the lane's data, for `lane reset`: emptying tables
+// that block a schema change, or restoring the repo's seed snapshot. Logged on the lane.
+route("/api/lane/reset-key", "POST", async (ctx, req) => {
+  const person = await authed(ctx, req);
+  const b = await body(req);
+  const repo = str(b, "repo");
+  const branch = str(b, "branch");
+  if (branch.startsWith("pool:")) throw new HttpError(400, "warm-pool spares can't be reset");
+  const info = await ctx.runQuery(internal.lanes.laneIdFor, { repo, branch });
+  if (!info || info.state !== "ready" || !info.deploymentName) throw new HttpError(409, "lane is not ready");
+  const holder = optStr(b, "holder") ?? person;
+  const minted = await ctx.runAction(internal.provision.mintKey, {
+    laneId: info.laneId,
+    deploymentName: info.deploymentName,
+    holder,
+    purpose: "seed",
+  });
+  await ctx.runMutation(internal.lanes.logLaneEvent, {
+    repo,
+    branch,
+    type: "reset",
+    detail: optStr(b, "detail") ?? "data reset",
+    actor: holder,
+  });
+  return { ...minted, snapshot: await ctx.runQuery(internal.seed.latest, { repo }) };
+});
+
 route("/api/lane/event", "POST", async (ctx, req) => {
   const person = await authed(ctx, req);
   const b = await body(req);
