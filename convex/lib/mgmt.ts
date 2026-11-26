@@ -60,6 +60,8 @@ export const DEPLOYER_ACTIONS = [
 // so a deploy never depends on these permissions.
 export const SEED_ACTIONS = [
   "deployment:backups:create",
+  // `convex export` and `convex import` poll the backup they start; without this both are refused.
+  "deployment:backups:view",
   "deployment:backups:download",
   "deployment:backups:import",
   "deployment:data:view",

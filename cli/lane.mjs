@@ -535,7 +535,7 @@ async function waitFor(repo, branch, sha, timeoutMs = 10 * 60_000) {
 }
 
 // The serialized deployer. Always deploys what's pushed to the branch, never a working tree.
-async function deploy(repo, branch) {
+async function deploy(repo, branch, { worktree = false } = {}) {
   const holder = `${process.env.LANE_DEPLOYER || readState("agent.json")?.name || detectAgent().vendor + "@" + os.hostname()}#${process.pid}`;
   for (let round = 0; round < 10; round++) {
     const claim = await api("POST", "/api/deploy/claim", { repo, branch, holder, force: round === 0 && !!args.force });
@@ -557,12 +557,13 @@ async function deploy(repo, branch) {
     try {
       // Fast path: this checkout is exactly the pushed commit, so deploy it in place with its
       // node_modules. Otherwise use a clean worktree at that commit.
-      const inPlace = cleanCheckoutAt(sha);
+      // A parallel pool fill deploys each spare from its own worktree.
+      const inPlace = !worktree && cleanCheckoutAt(sha);
       const dir = inPlace ? repoRoot : (wt = checkout(sha, branch));
       const env = { ...process.env, CONVEX_DEPLOY_KEY: claim.deployKey };
       delete env.CONVEX_DEPLOYMENT;
       const tDeploy = Date.now();
-      run("npx", ["convex", "deploy", "-y", ...(claim.deployArgs || [])], dir, env);
+      await runAsync("npx", ["convex", "deploy", "-y", ...(claim.deployArgs || [])], dir, env);
       detail = `deploy ${secs(Date.now() - tDeploy)}`;
       const setup = claim.setupFunctions || (claim.seedFunction ? [claim.seedFunction] : []);
       // A first deploy imports the repo's seed snapshot when there is one, instead of running
@@ -585,13 +586,15 @@ async function deploy(repo, branch) {
           log(`  seed snapshot import failed, running the setup functions instead: ${String(e.message || e).split("\n").slice(-3).join(" ")}`);
         }
       }
+      // With nothing to run, a first deploy is as seeded as it gets.
+      if (!setup.length) seeded = true;
       if (!imported && setup.length) {
         const tSeed = Date.now();
         const url = (await getLane(repo, branch)).lane.deploymentUrl;
         const slow = [];
         for (const fn of setup) {
           const t = Date.now();
-          if (!(url && (await callFunction(url, claim.deployKey, fn)))) run("npx", ["convex", "run", fn], dir, env);
+          if (!(url && (await callFunction(url, claim.deployKey, fn)))) await runAsync("npx", ["convex", "run", fn], dir, env);
           slow.push(`${fn} ${secs(Date.now() - t)}`);
         }
         seeded = true;
@@ -639,23 +642,23 @@ let snapshotFill = null; // set by `lane pool fill`: { done } once it has export
 async function importSnapshot(snap, seedKey, dir) {
   const res = await fetch(snap.url);
   if (!res.ok) throw new Error(`download failed: ${res.status}`);
-  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}.zip`);
+  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`);
   fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
   try {
     const env = { ...process.env, CONVEX_DEPLOY_KEY: seedKey };
     delete env.CONVEX_DEPLOYMENT;
-    run("npx", ["convex", "import", "--replace-all", "-y", tmp], dir, env);
+    await runAsync("npx", ["convex", "import", "--replace-all", "-y", tmp], dir, env);
   } finally {
     fs.rmSync(tmp, { force: true });
   }
 }
 
 async function exportSnapshot(repo, sha, tree, seedKey, dir) {
-  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}.zip`);
+  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`);
   try {
     const env = { ...process.env, CONVEX_DEPLOY_KEY: seedKey };
     delete env.CONVEX_DEPLOYMENT;
-    run("npx", ["convex", "export", "--include-file-storage", "--path", tmp], dir, env);
+    await runAsync("npx", ["convex", "export", "--include-file-storage", "--path", tmp], dir, env);
     const { url } = await api("POST", "/api/seed/upload-url", {});
     const up = await fetch(url, { method: "POST", headers: { "Content-Type": "application/zip" }, body: fs.readFileSync(tmp) });
     if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
@@ -686,6 +689,19 @@ async function callFunction(deploymentUrl, deployKey, fn, fnArgs = {}) {
   if (!out) return false;
   if (out.status === "success") return { value: out.value };
   throw new Error(`${fn} failed: ${out.errorMessage || JSON.stringify(out).slice(0, 500)}`);
+}
+
+// Like run(), without blocking the event loop, so `lane pool fill` can deploy spares in parallel.
+function runAsync(bin, argv, cwd, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    const keep = (d) => { out = (out + d).slice(-(1 << 20)); };
+    child.stdout.on("data", keep);
+    child.stderr.on("data", keep);
+    child.on("error", (e) => reject(new Error(`${bin} ${argv.join(" ")} failed:\n${e.message}`)));
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${bin} ${argv.join(" ")} failed:\n${out}`))));
+  });
 }
 
 function run(bin, argv, cwd, env) {
@@ -722,10 +738,11 @@ function reusableNodeModules(wt, sha, pkg) {
 
 // A clean worktree at exactly `sha`. node_modules comes from this checkout when it matches, else
 // a cache shared by lockfile hash, else (install scripts or workspaces) a fresh install there.
+let checkouts = 0;
 function checkout(sha, branch) {
   if (!git(["cat-file", "-e", sha + "^{commit}"])) git(["fetch", "--quiet", "origin", branch]);
   const cache = path.join(os.homedir(), ".cache/lane");
-  const wt = path.join(cache, "wt", `${sha.slice(0, 12)}-${process.pid}`);
+  const wt = path.join(cache, "wt", `${sha.slice(0, 12)}-${process.pid}-${++checkouts}`);
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   execFileSync("git", ["worktree", "add", "--detach", "--force", wt, sha], { cwd: gitDir, stdio: "ignore" });
   const lock = ["package-lock.json", "package.json"].map((f) => path.join(wt, f)).find((f) => fs.existsSync(f));
@@ -748,7 +765,7 @@ function checkout(sha, branch) {
   const hash = createHash("sha256").update(fs.readFileSync(lock)).digest("hex").slice(0, 16);
   const nm = path.join(cache, "node_modules", hash);
   if (!fs.existsSync(path.join(nm, "node_modules"))) {
-    const tmp = nm + ".tmp-" + process.pid;
+    const tmp = nm + ".tmp-" + process.pid + "-" + checkouts;
     fs.mkdirSync(tmp, { recursive: true });
     for (const f of ["package.json", "package-lock.json"]) {
       if (fs.existsSync(path.join(wt, f))) fs.copyFileSync(path.join(wt, f), path.join(tmp, f));
@@ -923,13 +940,13 @@ async function pool() {
   if (sub !== "fill") {
     if (args.json) return console.log(JSON.stringify(p, null, 2));
     const warm = p.spares.filter((s) => s.state === "ready" && s.seeded && !s.deploying).length;
-    const failed = p.spares.filter((s) => s.state === "failed").length;
-    const warming = p.spares.filter((s) => s.state === "provisioning" || s.state === "ready").length - warm;
+    const failed = p.spares.filter((s) => s.state === "failed" || (s.state === "ready" && !s.seeded && s.error && !s.deploying)).length;
+    const warming = p.spares.filter((s) => s.state === "provisioning" || s.state === "ready").length - warm - p.spares.filter((s) => s.state === "ready" && !s.seeded && s.error && !s.deploying).length;
     log(p.poolSize
       ? `${repo}: warm pool ${warm}/${p.poolSize} ready, ${warming} warming, ${failed} failed`
       : `${repo}: warm pool off (an admin sets its size in the panel)`);
     for (const s of p.spares) {
-      const what = s.state !== "ready" ? s.state : s.deploying ? `deploying ${short(s.deploying)}` : s.seeded ? `warm at ${short(s.deployedSha)}` : "waiting for first deploy";
+      const what = s.state !== "ready" ? s.state : s.deploying ? `deploying ${short(s.deploying)}` : s.seeded ? `warm at ${short(s.deployedSha)}` : s.error ? "first deploy failed" : "waiting for first deploy";
       log(`  ${s.branch.padEnd(16)} ${(s.deploymentName || "").padEnd(28)} ${what}${s.error ? ` (${s.error.slice(0, 80)})` : ""}`);
     }
     return;
@@ -940,11 +957,18 @@ async function pool() {
   if (!todo.length) return log(`pool: ${p.spares.length} spare(s), all warm at ${short(sha)}`);
   snapshotFill = { done: false };
   let failed = 0;
-  for (const s of todo) {
+  const fill = async (s, opts) => {
     log(`pool: ${s.branch} (${s.deploymentName})`);
     await api("POST", "/api/lane/push", { repo, branch: s.branch, sha, convexChanged: true, actor: "lane pool fill" });
-    if ((await deploy(repo, s.branch)) === false) failed++;
-  }
+    if ((await deploy(repo, s.branch, opts)) === false) failed++;
+  };
+  // An unseeded spare may have to seed from scratch and export the snapshot the others then
+  // import, so fill one of those first; then the rest at once, each from its own worktree.
+  const first = todo.find((s) => !s.seeded);
+  const t0 = Date.now();
+  if (first) await fill(first);
+  await Promise.all(todo.filter((s) => s !== first).map((s) => fill(s, { worktree: true })));
+  log(`pool: filled ${todo.length - failed}/${todo.length} spare(s) in ${secs(Date.now() - t0)}`);
   if (failed) die(`${failed} spare(s) failed to deploy`);
 }
 
