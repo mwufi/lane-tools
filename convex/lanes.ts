@@ -507,6 +507,8 @@ function laneSummary(lane: Doc<"lanes">) {
     deploymentName: lane.deploymentName ?? null,
     deploymentUrl: lane.deploymentUrl ?? null,
     siteUrl: lane.siteUrl ?? null,
+    // The app's preview URL when the lane's allow-listed env names one (e.g. a Vercel branch URL).
+    appUrl: lane.env?.SITE_URL ?? lane.env?.APP_URL ?? null,
     dashboardUrl: lane.deploymentName ? `https://dashboard.convex.dev/d/${lane.deploymentName}` : null,
     headSha: lane.headSha ?? null,
     deployedSha: lane.deployedSha ?? null,
