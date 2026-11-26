@@ -594,14 +594,14 @@ function lanesTab(d) {
       const page = '/lane?repo=' + encodeURIComponent(l.repo) + '&branch=' + encodeURIComponent(l.branch);
       const state = l.deploying ? pill("provisioning", "deploying") : pill(l.state);
       const btn = l.state === "failed" ? '<button class="small" data-retry="' + esc(l.repo) + '|' + esc(l.branch) + '">Retry</button>' :
-        l.state === "archived" ? '' : '<button class="small danger" data-archive="' + esc(l.repo) + '|' + esc(l.branch) + '">Archive</button>';
+        (l.state === "archived" || l.state === "deleted") ? '<button class="small" data-restore="' + esc(l.repo) + '|' + esc(l.branch) + '|' + l.state + '">Restore</button>' : '<button class="small danger" data-archive="' + esc(l.repo) + '|' + esc(l.branch) + '">Archive</button>';
       return '<tr class="' + (l.state === "archived" ? "off" : "") + '"><td><a href="' + page + '">' + esc(l.branch) + '</a>' +
         (l.dashboardUrl && l.state !== "archived" ? ' <a class="faint" href="' + esc(l.dashboardUrl) + '" target="_blank" rel="noopener" title="Convex dashboard">↗</a>' : '') + '</td>' +
         '<td>' + state + '</td><td class="hide-sm sub">' + esc(l.repo) + '</td><td>' + (l.activeAgents ? '<b>' + l.activeAgents + '</b>' : '<span class="faint">0</span>') + '</td>' +
         '<td class="hide-sm mono sub">' + esc((l.deployedSha || "").slice(0, 7) || "–") + '</td><td class="hide-sm sub">' + ago(l.lastActivity) + '</td><td style="text-align:right">' + btn + '</td></tr>' +
         (l.state === "failed" && l.error ? '<tr><td colspan="7" class="err">' + esc(l.error.slice(0, 400)) + '</td></tr>' : '');
     }).join("") + '</table></div>' +
-    '<p class="sub">Archive revokes a lane\'s keys now and deletes its deployment after the repo\'s grace period. A push or reopened PR brings it back. Retry re-provisions a failed lane from scratch.</p>';
+    '<p class="sub">Archive revokes a lane\'s keys now and deletes its deployment after the repo\'s grace period. Restore (or a push, or a reopened PR) brings it back: the same backend within the grace period, a new one after. Retry re-provisions a failed lane from scratch.</p>';
   return h;
 }
 
@@ -807,6 +807,8 @@ function wire() {
   on("[data-archive]", async (b) => { const [repo, branch] = b.dataset.archive.split("|");
     if (await ask("Archive " + branch + "?", "Its keys are revoked now and its deployment is deleted after the grace period. A push or reopened PR brings it back.", "Archive", true))
       act(b, () => api("/api/admin/lanes/archive", { repo, branch }), "Archived " + branch); });
+  on("[data-restore]", (b) => { const [repo, branch, st] = b.dataset.restore.split("|");
+    act(b, () => api("/api/admin/lanes/retry", { repo, branch }), st === "archived" ? "Restored " + branch + " with the same backend." : "Restoring " + branch + " with a new backend. This takes a few minutes."); });
   on("[data-retry]", (b) => { const [repo, branch] = b.dataset.retry.split("|");
     act(b, () => api("/api/admin/lanes/retry", { repo, branch }), "Re-provisioning " + branch + ". This takes about a minute."); });
   on("[data-revoke]", async (b) => { if (await ask("Revoke " + b.dataset.name + "?", "Anything using this token stops working on its next call. This can't be undone.", "Revoke", true)) { NEWTOKEN = null; act(b, () => api("/api/admin/tokens/revoke", { id: b.dataset.revoke }), "Revoked " + b.dataset.name); } });
