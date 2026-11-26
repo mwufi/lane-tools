@@ -34,6 +34,7 @@ Usage: lane <command> [options]
   restore                 Bring an archived lane back (same deployment within grace), like up
   page                    Print the lane page URL
   pool [fill [--sha <sha>]]  Show the repo's warm spares; fill deploys <sha> (default HEAD) to them
+                          (--default-branch: the default branch's newest commit; --wait: for new spares)
   pr-status [--pr N]      Post or update the lane status comment on the branch's PR (needs GITHUB_TOKEN)
   hook post-receive       Git post-receive hook: report pushes and run the deployer
 
@@ -189,6 +190,7 @@ async function api(method, p, body) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (s) => (s ? s.slice(0, 7) : "-");
 const secs = (ms) => (ms / 1000).toFixed(1) + "s";
+const mb = (bytes) => (bytes ? (bytes / 1048576).toFixed(1) + " MB" : "size unknown");
 const log = (...m) => { if (!args.json && !args.quiet) console.error(...m); };
 
 function pageUrl(repo, branch) {
@@ -234,7 +236,10 @@ async function up({ quiet = false } = {}) {
     v = await getLane(repo, branch);
   }
   if (v.lane.state === "failed") die("lane provisioning failed: " + v.lane.error);
-  if (ensured.warm) log(`  claimed warm spare ${v.lane.deploymentName} (seeded, running ${short(v.lane.deployedSha)})`);
+  if (ensured.warm) {
+    log(`  claimed warm spare ${v.lane.deploymentName} (seeded, running ${short(v.lane.deployedSha)})`);
+    refillInBackground(repo);
+  }
   else if (ensured.created) log(`  provisioned ${v.lane.deploymentName} in ${secs(Date.now() - t0)}`);
   excludeLocalFiles();
   if (headSha && v.lane.headSha && v.lane.headSha !== headSha) {
@@ -576,12 +581,21 @@ async function deploy(repo, branch, { worktree = false } = {}) {
       const refresh = !!(claim.needSeed && claim.seedKey && snapshotFill && !snapshotFill.done &&
         (!claim.snapshot || (tree && claim.snapshot.tree !== tree)));
       let imported = false;
-      if (claim.needSeed && claim.snapshot && claim.seedKey && !refresh) {
+      // Importing isn't always quicker than seeding: once an import of this snapshot has taken
+      // longer than the setup functions did on the lane it came from, run those instead.
+      const snap = claim.snapshot;
+      const slowImport = !!(snap && snap.importMs && snap.setupMs && snap.importMs >= snap.setupMs);
+      if (claim.needSeed && snap && claim.seedKey && !refresh && slowImport && setup.length) {
+        log(`  seed snapshot import took ${secs(snap.importMs)} last time against ${secs(snap.setupMs)} for setup; running the setup functions`);
+      }
+      if (claim.needSeed && snap && claim.seedKey && !refresh && !(slowImport && setup.length)) {
         const tImport = Date.now();
         try {
-          await importSnapshot(claim.snapshot, claim.seedKey, dir);
+          await importSnapshot(snap, claim.seedKey, dir);
           imported = seeded = true;
-          detail += `, seed snapshot ${short(claim.snapshot.sha)} imported ${secs(Date.now() - tImport)}`;
+          const importMs = Date.now() - tImport;
+          detail += `, seed snapshot ${short(snap.sha)} (${mb(snap.bytes)}) imported ${secs(importMs)}`;
+          await api("POST", "/api/seed/import", { repo, sha: snap.sha, importMs }).catch(() => {});
         } catch (e) {
           log(`  seed snapshot import failed, running the setup functions instead: ${String(e.message || e).split("\n").slice(-3).join(" ")}`);
         }
@@ -603,7 +617,7 @@ async function deploy(repo, branch, { worktree = false } = {}) {
         if (refresh) {
           try {
             const tExport = Date.now();
-            await exportSnapshot(repo, sha, tree, claim.seedKey, dir);
+            await exportSnapshot(repo, sha, tree, claim.seedKey, dir, Date.now() - tSeed);
             if (snapshotFill) snapshotFill.done = true;
             log(`  exported a fresh seed snapshot in ${secs(Date.now() - tExport)}`);
           } catch (e) {
@@ -653,7 +667,7 @@ async function importSnapshot(snap, seedKey, dir) {
   }
 }
 
-async function exportSnapshot(repo, sha, tree, seedKey, dir) {
+async function exportSnapshot(repo, sha, tree, seedKey, dir, setupMs) {
   const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`);
   try {
     const env = { ...process.env, CONVEX_DEPLOY_KEY: seedKey };
@@ -663,7 +677,7 @@ async function exportSnapshot(repo, sha, tree, seedKey, dir) {
     const up = await fetch(url, { method: "POST", headers: { "Content-Type": "application/zip" }, body: fs.readFileSync(tmp) });
     if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
     const { storageId } = await up.json();
-    await api("POST", "/api/seed/snapshot", { repo, sha, tree: tree || undefined, storageId });
+    await api("POST", "/api/seed/snapshot", { repo, sha, tree: tree || undefined, storageId, setupMs });
   } finally {
     fs.rmSync(tmp, { force: true });
   }
@@ -929,13 +943,44 @@ async function postReceive() {
 
 // ---------------------------------------------------------------- warm pool
 
+// The repo's default branch, as the remote says (falls back to the remote-tracking HEAD, then main).
+function defaultBranch() {
+  const ls = git(["ls-remote", "--symref", "origin", "HEAD"]);
+  const m = ls && ls.match(/^ref: refs\/heads\/(\S+)\s+HEAD/m);
+  if (m) return m[1];
+  const tracked = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  if (tracked) return tracked.replace(/^origin\//, "");
+  return ["main", "master"].find((b) => git(["rev-parse", "--verify", "--quiet", `refs/heads/${b}`])) || "main";
+}
+
+// Taking a spare leaves the pool one short. Whoever took it is on a machine that can deploy, so
+// refill from here, detached, instead of waiting for CI. Each spare's deploy lock keeps two
+// refills from deploying the same spare. LANE_NO_REFILL=1 turns it off.
+function refillInBackground(repo) {
+  if (process.env.LANE_NO_REFILL || !gitDir) return;
+  const logFile = path.join(gitDir, "lane-pool-fill.log");
+  try {
+    const out = fs.openSync(logFile, "a");
+    const child = spawn(process.execPath, [process.argv[1], "pool", "fill", "--default-branch", "--wait", "--repo", repo], {
+      cwd: repoRoot,
+      detached: true,
+      stdio: ["ignore", out, out],
+      env: { ...process.env, LANE_DEPLOYER: process.env.LANE_DEPLOYER || `refill:${readState("agent.json")?.name || os.hostname()}` },
+    });
+    child.unref();
+    log(`  refilling the warm pool in the background (log: ${path.relative(repoRoot, logFile) || logFile})`);
+  } catch (e) {
+    log(`  couldn't start a pool refill: ${e.message}`);
+  }
+}
+
 // Spare lanes kept deployed from the default branch and seeded, so a new lane starts warm.
 // `lane pool fill` runs in CI on pushes to the default branch: it deploys that commit to every
 // spare that isn't running it (seeding new ones), under each spare's own deploy lock.
 async function pool() {
   const repo = repoId();
   const sub = args._[1];
-  if (sub && sub !== "fill") die("usage: lane pool [fill [--sha <sha>]]");
+  if (sub && sub !== "fill") die("usage: lane pool [fill [--sha <sha> | --default-branch] [--wait]]");
   const p = await api("GET", `/api/pool?repo=${encodeURIComponent(repo)}`);
   if (sub !== "fill") {
     if (args.json) return console.log(JSON.stringify(p, null, 2));
@@ -951,8 +996,18 @@ async function pool() {
     }
     return;
   }
-  const sha = typeof args.sha === "string" ? git(["rev-parse", args.sha]) || args.sha : git(["rev-parse", "HEAD"]);
+  // `--default-branch` deploys the newest commit on the repo's default branch rather than HEAD:
+  // what a refill started from someone's feature-branch checkout wants.
+  const sha = args["default-branch"]
+    ? remoteHead(defaultBranch()) || git(["rev-parse", "--verify", "--quiet", defaultBranch()])
+    : typeof args.sha === "string" ? git(["rev-parse", args.sha]) || args.sha : git(["rev-parse", "HEAD"]);
   if (!sha) die("no commit to deploy; pass --sha");
+  // Claiming a spare makes lane-control create its replacement, which takes a minute or two to
+  // come up. With --wait, give it up to three minutes so this fill covers it too.
+  for (const until = Date.now() + 180_000; args.wait && p.spares.some((s) => s.state === "provisioning") && Date.now() < until; ) {
+    await sleep(5000);
+    Object.assign(p, await api("GET", `/api/pool?repo=${encodeURIComponent(repo)}`));
+  }
   const todo = p.spares.filter((s) => s.state === "ready" && !(s.seeded && s.deployedSha === sha));
   if (!todo.length) return log(`pool: ${p.spares.length} spare(s), all warm at ${short(sha)}`);
   snapshotFill = { done: false };

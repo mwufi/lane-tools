@@ -56,18 +56,23 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
   get env-write. Values are kept on the lane and set again if it is re-provisioned.
 - Dormant lanes (14 days without activity) are archived by a cron.
 - Warm pool (repo setting `poolSize`, 0 = off): the control plane keeps that many spare lanes (branch
-  `pool:<id>`), and the `lane-pool` Action deploys `main` to them and runs the setup functions once. A new
+  `pool:<id>`), and `lane pool fill` deploys `main` to them and runs the setup functions once. A new
   lane claims the oldest warm spare in the same transaction as `ensure`: it starts seeded and running
   `main`, the deployment's `LANE_BRANCH` is updated, and the branch's head arrives as a push, so a branch
   that doesn't change `convex/` is live at once and one that does gets a single deploy (no setup functions:
   the spare was seeded from `main`). The claimed deployment is renamed `preview/<branch>` in the Convex
-  dashboard. With no warm spare, the lane starts cold as before.
+  dashboard. With no warm spare, the lane starts cold as before. Whoever claims a spare refills the pool:
+  `lane join` starts a detached `lane pool fill --default-branch --wait` from that machine (log in
+  `.git/lane-pool-fill.log`; `LANE_NO_REFILL=1` turns it off), which also moves stale spares to the newest
+  `main`. Each spare's deploy lock keeps concurrent refills apart, so the repo needs no workflow for this.
 - Seed snapshots: a lane's first deploy imports the repo's newest seed snapshot (`npx convex import
   --replace-all`, with its own 31-minute key) instead of running every setup function, and falls back to
   the setup functions if there is none or the import fails. Only `lane pool fill` (the default branch) makes
   snapshots: it re-seeds one spare from scratch when there is none or `convex/` differs from what the
   snapshot was seeded from, and exports a fresh one. Branch lanes never export. With the warm pool off,
-  there are no snapshots and lanes run the setup functions. The newest two are kept.
+  there are no snapshots and lanes run the setup functions. The newest two are kept. A snapshot records how
+  long the setup functions took and how long its last import took; once an import is the slower of the two,
+  lanes run the setup functions instead (Cosign's ~600-table snapshot imported in 459s against 172s of setup).
 
 ## Setup (once per team)
 

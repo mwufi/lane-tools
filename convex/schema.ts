@@ -135,6 +135,10 @@ export default defineSchema({
     tree: v.optional(v.string()),
     storageId: v.id("_storage"),
     bytes: v.number(),
+    // How long the setup functions took on the lane it was exported from, and how long the
+    // last import of it took. The deployer skips the import when it isn't the faster path.
+    setupMs: v.optional(v.number()),
+    importMs: v.optional(v.number()),
     createdBy: v.string(),
     at: v.number(),
   }).index("by_repo", ["repo"]),
