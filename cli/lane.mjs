@@ -568,10 +568,11 @@ async function deploy(repo, branch) {
       // every setup function. `lane pool fill` instead re-seeds from scratch when convex/ has
       // changed since the snapshot, then exports a fresh one for everyone after it.
       const tree = git(["rev-parse", `${sha}:convex`], { cwd: dir });
-      // The first lane of a repo makes its first snapshot; after that only the pool filler
-      // refreshes it (once per run), when convex/ differs from what the snapshot was seeded from.
-      const refresh = !!(claim.needSeed && claim.seedKey && (!claim.snapshot ||
-        (snapshotFill && !snapshotFill.done && tree && claim.snapshot.tree !== tree)));
+      // Only `lane pool fill` (which deploys the default branch) exports a snapshot, once per
+      // run, when there is none or convex/ differs from what it was seeded from. A branch lane
+      // never makes one: its seed or schema shouldn't become everyone's starting data.
+      const refresh = !!(claim.needSeed && claim.seedKey && snapshotFill && !snapshotFill.done &&
+        (!claim.snapshot || (tree && claim.snapshot.tree !== tree)));
       let imported = false;
       if (claim.needSeed && claim.snapshot && claim.seedKey && !refresh) {
         const tImport = Date.now();
@@ -981,8 +982,10 @@ function prStatusBody(repo, branch, v) {
     ["Lane page", `[open](${pageUrl(repo, branch)}): agents, deploys, keys`],
   ];
   const active = v.agents.filter((a) => a.status !== "done" && a.status !== "idle");
-  if (active.length) rows.push(["On this lane", active.map((a) => `${a.name || a.vendor} (${a.vendor}): ${a.task}`).join("<br>")]);
-  if (l.error) rows.push(["Last error", "`" + l.error.split("\n")[0].slice(0, 200).replace(/`/g, "'") + "`"]);
+  // Agents' tasks and errors are free text: keep them from breaking the table or rendering markdown.
+  const cell = (t) => String(t ?? "").replace(/[\r\n]+/g, " ").replace(/[\\`*_[\]<>|!]/g, (c) => "\\" + c);
+  if (active.length) rows.push(["On this lane", active.map((a) => `${cell(a.name || a.vendor)} (${cell(a.vendor)}): ${cell(a.task)}`).join("<br>")]);
+  if (l.error) rows.push(["Last error", cell(l.error.split("\n")[0].slice(0, 200))]);
   return [
     PR_MARKER,
     `### Lane for \`${branch}\``,
@@ -1012,8 +1015,12 @@ async function prStatus() {
     return log(`no lane for ${branch} yet; nothing to update`);
   }
   const body = prStatusBody(repo, branch, v);
-  const comments = await gh("GET", `/repos/${repo}/issues/${pr}/comments?per_page=100`);
-  const mine = comments.find((c) => typeof c.body === "string" && c.body.startsWith(PR_MARKER));
+  let mine = null;
+  for (let page = 1; page <= 30 && !mine; page++) {
+    const comments = await gh("GET", `/repos/${repo}/issues/${pr}/comments?per_page=100&page=${page}`);
+    mine = comments.find((c) => typeof c.body === "string" && c.body.startsWith(PR_MARKER)) || null;
+    if (comments.length < 100) break;
+  }
   if (mine) await gh("PATCH", `/repos/${repo}/issues/comments/${mine.id}`, { body });
   else await gh("POST", `/repos/${repo}/issues/${pr}/comments`, { body });
   log(`${mine ? "updated" : "posted"} lane status on ${repo}#${pr}`);
