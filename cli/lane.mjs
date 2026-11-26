@@ -30,6 +30,7 @@ Usage: lane <command> [options]
   env NAME=value ...      Set allow-listed env vars on this lane (e.g. SITE_URL of the branch preview)
   down                    Archive the lane: revoke keys now, delete the deployment after grace
   page                    Print the lane page URL
+  pool [fill [--sha <sha>]]  Show the repo's warm spares; fill deploys <sha> (default HEAD) to them
   hook post-receive       Git post-receive hook: report pushes and run the deployer
 
 Common options: --repo owner/name  --branch name  --json
@@ -229,7 +230,8 @@ async function up({ quiet = false } = {}) {
     v = await getLane(repo, branch);
   }
   if (v.lane.state === "failed") die("lane provisioning failed: " + v.lane.error);
-  if (ensured.created) log(`  provisioned ${v.lane.deploymentName} in ${secs(Date.now() - t0)}`);
+  if (ensured.warm) log(`  claimed warm spare ${v.lane.deploymentName} (seeded, running ${short(v.lane.deployedSha)})`);
+  else if (ensured.created) log(`  provisioned ${v.lane.deploymentName} in ${secs(Date.now() - t0)}`);
   excludeLocalFiles();
   if (headSha && v.lane.headSha && v.lane.headSha !== headSha) {
     // Someone did a plain `git push`: catch the lane up to what's on the branch now.
@@ -764,6 +766,38 @@ async function postReceive() {
   }
 }
 
+// ---------------------------------------------------------------- warm pool
+
+// Spare lanes kept deployed from the default branch and seeded, so a new lane starts warm.
+// `lane pool fill` runs in CI on pushes to the default branch: it deploys that commit to every
+// spare that isn't running it (seeding new ones), under each spare's own deploy lock.
+async function pool() {
+  const repo = repoId();
+  const sub = args._[1];
+  if (sub && sub !== "fill") die("usage: lane pool [fill [--sha <sha>]]");
+  const p = await api("GET", `/api/pool?repo=${encodeURIComponent(repo)}`);
+  if (sub !== "fill") {
+    if (args.json) return console.log(JSON.stringify(p, null, 2));
+    log(`${repo}: pool size ${p.poolSize}${p.poolSize ? "" : " (off; an admin sets it in the panel)"}`);
+    for (const s of p.spares) {
+      const what = s.state !== "ready" ? s.state : s.deploying ? `deploying ${short(s.deploying)}` : s.seeded ? `warm at ${short(s.deployedSha)}` : "waiting for first deploy";
+      log(`  ${s.branch.padEnd(16)} ${(s.deploymentName || "").padEnd(28)} ${what}${s.error ? ` (${s.error.slice(0, 80)})` : ""}`);
+    }
+    return;
+  }
+  const sha = typeof args.sha === "string" ? git(["rev-parse", args.sha]) || args.sha : git(["rev-parse", "HEAD"]);
+  if (!sha) die("no commit to deploy; pass --sha");
+  const todo = p.spares.filter((s) => s.state === "ready" && !(s.seeded && s.deployedSha === sha));
+  if (!todo.length) return log(`pool: ${p.spares.length} spare(s), all warm at ${short(sha)}`);
+  let failed = 0;
+  for (const s of todo) {
+    log(`pool: ${s.branch} (${s.deploymentName})`);
+    await api("POST", "/api/lane/push", { repo, branch: s.branch, sha, convexChanged: true, actor: "lane pool fill" });
+    if ((await deploy(repo, s.branch)) === false) failed++;
+  }
+  if (failed) die(`${failed} spare(s) failed to deploy`);
+}
+
 // ---------------------------------------------------------------- main
 
 const commands = {
@@ -789,6 +823,7 @@ const commands = {
   env,
   down,
   page: async () => console.log(pageUrl(repoId(), branchName())),
+  pool,
   hook: async () => {
     if (args._[1] !== "post-receive") die("usage: lane hook post-receive");
     await postReceive();

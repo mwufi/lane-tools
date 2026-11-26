@@ -35,6 +35,8 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 | `convex/provision.ts` | The Convex resource type: create a preview deployment named `preview/<branch>`, set env, mint scoped keys, revoke, delete. |
 | `cli/lane.mjs` | Zero-dependency Node CLI. Detects vendor/thread from env (`CLAUDECODE`, `CODEX_*`, `CURSOR_*`, `AMP_*`, `AI_AGENT`), overridable with `LANE_VENDOR`, `LANE_THREAD_URL`, `LANE_MACHINE`, `LANE_PERSON`. |
 | `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, archives on PR close or branch delete. |
+| `templates/lane-pool.yml` | GitHub Action that keeps the warm pool deployed from `main` and seeded. |
+| `convex/pool.ts` | Warm pool: spare lanes per repo that a new lane claims instead of starting cold. |
 | `examples/pingpal/` | "Message your friends" sample app used by the demo. |
 | `demo/` | `setup-remote.sh` (a bare git repo + post-receive hook standing in for GitHub), `e2e.sh`, `screenshot.mjs`. |
 
@@ -50,6 +52,13 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
   `lane env NAME=value` / `POST /api/lane/env`, through a one-use env-write key; lane keys themselves never
   get env-write. Values are kept on the lane and set again if it is re-provisioned.
 - Dormant lanes (14 days without activity) are archived by a cron.
+- Warm pool (repo setting `poolSize`, 0 = off): the control plane keeps that many spare lanes (branch
+  `pool:<id>`), and the `lane-pool` Action deploys `main` to them and runs the setup functions once. A new
+  lane claims the oldest warm spare in the same transaction as `ensure`: it starts seeded and running
+  `main`, the deployment's `LANE_BRANCH` is updated, and the branch's head arrives as a push, so a branch
+  that doesn't change `convex/` is live at once and one that does gets a single deploy (no setup functions:
+  the spare was seeded from `main`). The claimed deployment is renamed `preview/<branch>` in the Convex
+  dashboard. With no warm spare, the lane starts cold as before.
 
 ## Setup (once per team)
 

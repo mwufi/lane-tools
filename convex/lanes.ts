@@ -1,3 +1,4 @@
+import { claimSpare, POOL_PREFIX } from "./pool";
 import { v } from "convex/values";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -35,7 +36,7 @@ export const ensure = internalMutation({
     actor: v.string(),
     headSha: v.optional(v.string()),
   },
-  returns: v.object({ laneId: v.id("lanes"), created: v.boolean() }),
+  returns: v.object({ laneId: v.id("lanes"), created: v.boolean(), warm: v.optional(v.boolean()) }),
   handler: async (ctx, args) => {
     const repoCfg = await ctx.db
       .query("repos")
@@ -52,6 +53,18 @@ export const ensure = internalMutation({
         patch.state = "ready";
         await logEvent(ctx, existing._id, "revived", args.actor, "reopened during grace period");
       } else if (existing.state === "deleted" || existing.state === "failed") {
+        if (existing.pool) throw new Error(`${args.branch} is a warm-pool spare`);
+        const laneId = await claimSpare(ctx, { ...args, into: existing });
+        if (laneId) {
+          // Agents from the old incarnation are history, not current work.
+          for (const a of await ctx.db
+            .query("laneAgents")
+            .withIndex("by_laneId", (q) => q.eq("laneId", existing._id))
+            .take(500)) {
+            await ctx.db.delete("laneAgents", a._id);
+          }
+          return { laneId, created: false, warm: true };
+        }
         Object.assign(patch, {
           state: "provisioning",
           error: undefined,
@@ -80,6 +93,9 @@ export const ensure = internalMutation({
       await ctx.db.patch("lanes", existing._id, patch);
       return { laneId: existing._id, created: false };
     }
+    if (args.branch.startsWith(POOL_PREFIX)) throw new Error(`"${POOL_PREFIX}" branches are reserved for the warm pool`);
+    const spareId = await claimSpare(ctx, args);
+    if (spareId) return { laneId: spareId, created: true, warm: true };
     const laneId = await ctx.db.insert("lanes", {
       repo: args.repo,
       branch: args.branch,
@@ -501,6 +517,7 @@ function laneSummary(lane: Doc<"lanes">) {
     createdAt: lane.createdAt,
     readyAt: lane.readyAt ?? null,
     lastActivity: lane.lastActivity,
+    pool: lane.pool ?? false,
   };
 }
 

@@ -29,6 +29,9 @@ export default defineSchema({
     // (full match), e.g. {"SITE_URL": "https://app-git-[a-z0-9-]+\\.vercel\\.app"}.
     laneEnvAllow: v.optional(v.record(v.string(), v.string())),
     convexTeamId: v.optional(v.id("convexTeams")), // whose token creates its lanes (unset: CONVEX_TEAM_TOKEN)
+    // Warm pool: this many spare lanes are kept deployed from the default branch and seeded,
+    // so a new lane claims one instead of starting cold. Unset or 0 turns the pool off.
+    poolSize: v.optional(v.number()),
   }).index("by_repo", ["repo"]),
 
   // Agent/person tokens. Only the SHA-256 hash is stored.
@@ -88,13 +91,17 @@ export default defineSchema({
     createdAt: v.number(),
     readyAt: v.optional(v.number()),
     lastActivity: v.number(),
+    // A warm-pool spare: `branch` is "pool:<id>" (a colon can't appear in a git branch) until
+    // a real branch claims it, which clears this flag.
+    pool: v.optional(v.boolean()),
     // Serialized deployer: a lease, so a crashed deployer can't hold it forever.
     lock: v.optional(
       v.object({ holder: v.string(), sha: v.string(), expiresAt: v.number() }),
     ),
   })
     .index("by_repo_and_branch", ["repo", "branch"])
-    .index("by_state", ["state"]),
+    .index("by_state", ["state"])
+    .index("by_repo_and_pool", ["repo", "pool"]),
 
   // High-churn heartbeat rows live apart from the lane row.
   laneAgents: defineTable({

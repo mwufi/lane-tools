@@ -17,6 +17,7 @@ import type * as lanes from "../lanes.js";
 import type * as lib_crypto from "../lib/crypto.js";
 import type * as lib_mgmt from "../lib/mgmt.js";
 import type * as page from "../page.js";
+import type * as pool from "../pool.js";
 import type * as provision from "../provision.js";
 
 import type {
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   "lib/crypto": typeof lib_crypto;
   "lib/mgmt": typeof lib_mgmt;
   page: typeof page;
+  pool: typeof pool;
   provision: typeof provision;
 }>;
 

@@ -2,6 +2,7 @@
 // HTTP routes in http.ts check that the caller is a lane admin first.
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 const RESERVED_ENV = /^LANE_/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -65,7 +66,9 @@ export const repos = internalQuery({
         laneEnvAllow: r.laneEnvAllow ?? {},
         convexTeamId: r.convexTeamId ?? null,
         graceMs: r.graceMs,
-        openLanes: lanes.filter((l) => l.state !== "deleted" && l.state !== "archived").length,
+        poolSize: r.poolSize ?? 0,
+        warmSpares: lanes.filter((l) => l.pool && l.state === "ready" && l.seeded).length,
+        openLanes: lanes.filter((l) => !l.pool && l.state !== "deleted" && l.state !== "archived").length,
       });
     }
     return out.sort((a, b) => a.repo.localeCompare(b.repo));
@@ -107,6 +110,7 @@ export const updateRepo = internalMutation({
     graceMs: v.optional(v.number()),
     laneEnvAllow: v.optional(v.record(v.string(), v.string())),
     convexTeamId: v.optional(v.union(v.id("convexTeams"), v.null())), // null: back to the default
+    poolSize: v.optional(v.number()),
   },
   returns: v.null(),
   handler: async (ctx, { repo, convexTeamId, ...patch }) => {
@@ -122,12 +126,16 @@ export const updateRepo = internalMutation({
     if (patch.convexProjectId !== undefined && !(Number.isInteger(patch.convexProjectId) && patch.convexProjectId > 0)) {
       throw new Error("Convex project id must be a positive number");
     }
+    if (patch.poolSize !== undefined && !(Number.isInteger(patch.poolSize) && patch.poolSize >= 0 && patch.poolSize <= 10)) {
+      throw new Error("pool size must be a whole number from 0 to 10");
+    }
     if (patch.setupFunctions?.some((f) => !/^[\w/.-]+:[\w]+$/.test(f))) throw new Error("setup functions look like module:function");
     if (patch.laneEnvAllow) for (const [n, p] of Object.entries(patch.laneEnvAllow)) checkPattern(n, p);
     const clean = Object.fromEntries(Object.entries(patch).filter(([, x]) => x !== undefined));
     if (clean.setupFunctions) await ctx.db.patch("repos", r._id, { seedFunction: undefined });
     await ctx.db.patch("repos", r._id, clean);
     if (convexTeamId !== undefined) await ctx.db.patch("repos", r._id, { convexTeamId: convexTeamId ?? undefined });
+    if (patch.poolSize !== undefined) await ctx.scheduler.runAfter(0, internal.pool.refill, { repo });
     return null;
   },
 });
@@ -201,7 +209,7 @@ export const onboarding = internalQuery({
     const laneIds = (repo: string) => new Set(lanes.filter((l) => l.repo === repo).map((l) => l._id as string));
     return {
       repos: repos.map((r) => {
-        const mine = lanes.filter((l) => l.repo === r.repo);
+        const mine = lanes.filter((l) => l.repo === r.repo && !l.pool);
         const ids = laneIds(r.repo);
         const pushOf = pushes.find((e) => ids.has(e.laneId) && isMachine(e.actor));
         const hook = deliveries.find((d) => d.repo === r.repo);

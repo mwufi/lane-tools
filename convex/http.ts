@@ -356,6 +356,7 @@ route("/api/admin/repos/update", "POST", async (ctx, req) => {
     laneEnvAllow: allow as Record<string, string> | undefined,
     // A team id, null for the default (CONVEX_TEAM_TOKEN), or left out to keep it.
     convexTeamId: b.convexTeamId === undefined ? undefined : ((optStr(b, "convexTeamId") ?? null) as Id<"convexTeams"> | null),
+    poolSize: b.poolSize === undefined ? undefined : num(b, "poolSize"),
   });
   return { ok: true };
 });
@@ -611,6 +612,14 @@ route("/api/repo", "GET", async (ctx, req) => {
   if (!repo) throw new HttpError(400, "repo is required");
   const cfg = await ctx.runQuery(internal.admin.repoConfig, { repo });
   return { repo, registered: cfg !== null };
+});
+
+// Warm-pool spares for a repo: `lane pool` shows them, `lane pool fill` deploys to them.
+route("/api/pool", "GET", async (ctx, req) => {
+  await authed(ctx, req);
+  const repo = new URL(req.url).searchParams.get("repo");
+  if (!repo) throw new HttpError(400, "repo is required");
+  return await ctx.runQuery(internal.pool.list, { repo });
 });
 
 route("/api/lanes", "GET", async (ctx, req) => {
