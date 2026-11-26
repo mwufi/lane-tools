@@ -52,6 +52,7 @@ export const repos = internalQuery({
   handler: async (ctx) => {
     const rows = await ctx.db.query("repos").take(200);
     const out = [];
+    const now = Date.now();
     for (const r of rows) {
       const lanes = await ctx.db
         .query("lanes")
@@ -67,7 +68,11 @@ export const repos = internalQuery({
         convexTeamId: r.convexTeamId ?? null,
         graceMs: r.graceMs,
         poolSize: r.poolSize ?? 0,
-        warmSpares: lanes.filter((l) => l.pool && l.state === "ready" && l.seeded).length,
+        warmSpares: lanes.filter((l) => l.pool && l.state === "ready" && l.seeded && !(l.lock && l.lock.expiresAt > now)).length,
+        // Spares on their way: being created, or created and not yet deployed, seeded or done deploying.
+        warmingSpares: lanes.filter((l) => l.pool && (l.state === "provisioning" ||
+          (l.state === "ready" && (!l.seeded || (l.lock && l.lock.expiresAt > now))))).length,
+        failedSpares: lanes.filter((l) => l.pool && l.state === "failed").length,
         openLanes: lanes.filter((l) => !l.pool && l.state !== "deleted" && l.state !== "archived").length,
       });
     }
