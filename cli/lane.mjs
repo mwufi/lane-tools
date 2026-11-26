@@ -17,7 +17,7 @@ Usage: lane <command> [options]
   init --url <url> [--token-stdin]   Set up with a token you already have (no repo changes)
   doctor [--url <url>]    Check node, URL, token, network and whether this repo is registered
   run <fn> [json args]    Run a Convex function on this branch's lane, e.g. lane run seed:run '{"n":5}' 
-  push [git args]         git push, then redeploy the lane if convex/ changed and wait until live
+  push [git args]         git push, then redeploy the lane if a backend path changed and wait until live
   up                      Create or reuse this branch's lane, deploy the pushed HEAD, write .env.local
   join --task "..."       up, then register this agent on the lane page (vendor/thread auto-detected)
   status [--json]         Lane state, URLs, deployed vs HEAD, other agents and recent activity
@@ -278,11 +278,27 @@ function excludeLocalFiles() {
   fs.appendFileSync(p, (have && !have.endsWith("\n") ? "\n" : "") + "# lane\n" + missing.join("\n") + "\n");
 }
 
-// Tell lane-control the branch moved. convex/ unchanged -> no deploy needed.
+// What the Convex bundle can include, as git pathspecs: `.lane.json`'s `backendPaths` (from the
+// checkout, else from the pushed commit, for the bare-repo hook), or just convex/. A trailing
+// slash means a directory; anything else is one file.
+function backendPaths(sha) {
+  let cfg = fileCfg;
+  if (!Array.isArray(cfg.backendPaths) && sha) {
+    try {
+      cfg = JSON.parse(git(["show", `${sha}:.lane.json`]) || "{}");
+    } catch {
+      cfg = {};
+    }
+  }
+  const paths = Array.isArray(cfg.backendPaths) ? cfg.backendPaths.filter((p) => typeof p === "string" && p) : [];
+  return paths.length ? paths : ["convex/"];
+}
+
+// Tell lane-control the branch moved. Nothing in backendPaths changed -> no deploy needed.
 async function reportPush(repo, branch, oldSha, newSha) {
   let convexChanged = true;
   if (oldSha && git(["cat-file", "-e", oldSha + "^{commit}"]) !== null) {
-    const diff = git(["diff", "--name-only", oldSha, newSha, "--", "convex/"]);
+    const diff = git(["diff", "--name-only", oldSha, newSha, "--", ...backendPaths(newSha)]);
     if (diff !== null) convexChanged = diff.length > 0;
   }
   const me = readState("agent.json");
@@ -320,7 +336,7 @@ async function push() {
   }
   const res = await reportPush(repo, branch, view.lane.headSha || before, sha);
   if (!res.deployNeeded) {
-    log(`${short(sha)} is live on ${branch} (convex/ unchanged, no deploy) in ${secs(Date.now() - t0)}`);
+    log(`${short(sha)} is live on ${branch} (backend unchanged, no deploy) in ${secs(Date.now() - t0)}`);
   } else {
     if ((await deploy(repo, branch)) === false) die(`deploy of ${short(sha)} failed; the lane still runs ${short(view.lane.deployedSha)}`);
     await waitFor(repo, branch, sha);
@@ -729,8 +745,8 @@ function run(bin, argv, cwd, env) {
 function cleanCheckoutAt(sha) {
   if (!repoRoot || git(["rev-parse", "HEAD"]) !== sha) return false;
   if (!fs.existsSync(path.join(repoRoot, "node_modules"))) return false;
-  // Anything uncommitted under convex/ or in package files would leak into the deploy.
-  const dirty = git(["status", "--porcelain", "--untracked-files=all", "--", "convex", "package.json", "package-lock.json"]);
+  // Anything uncommitted in what the bundle can include, or in package files, would leak into the deploy.
+  const dirty = git(["status", "--porcelain", "--untracked-files=all", "--", ...backendPaths(sha), "package.json", "package-lock.json"]);
   return dirty === "";
 }
 
@@ -916,7 +932,7 @@ async function postReceive() {
       await api("POST", "/api/lane/down", { repo, branch, reason: "branch deleted" }).catch(() => {});
       continue;
     }
-    const changed = ZERO.test(oldSha) ? ["convex/"] : (git(["diff", "--name-only", oldSha, newSha, "--", "convex/"]) || "").split("\n").filter(Boolean);
+    const changed = ZERO.test(oldSha) ? ["convex/"] : (git(["diff", "--name-only", oldSha, newSha, "--", ...backendPaths(newSha)]) || "").split("\n").filter(Boolean);
     const res = await api("POST", "/api/lane/push", {
       repo,
       branch,
@@ -925,7 +941,7 @@ async function postReceive() {
       actor: process.env.LANE_PUSHER || process.env.USER || "git",
     });
     if (!res.lane) continue;
-    console.log(`lane: ${branch} -> ${short(newSha)} ${res.deployNeeded ? "(deploying in background)" : "(convex/ unchanged, no deploy)"}`);
+    console.log(`lane: ${branch} -> ${short(newSha)} ${res.deployNeeded ? "(deploying in background)" : "(backend unchanged, no deploy)"}`);
     if (res.deployNeeded) {
       // Like the GitHub Action deployer: detached, so the push returns at once.
       const logFile = path.join(gitDir, `lane-deploy-${branch.replace(/\W+/g, "-")}.log`);

@@ -9,9 +9,9 @@ lane login --url https://<lane-control>.convex.site   # once per machine: sign i
 lane doctor                              # checks node, URL, token, network, repo registered
 
 lane join --task "Add emoji reactions"   # create or reuse this branch's lane, register on its page
-lane push                                # git push + redeploy if convex/ changed + wait until live
+lane push                                # git push + redeploy if a backend path changed + wait until live
 lane status                              # URLs, deployed vs HEAD, other agents, recent activity
-git push                                 # the lane follows the branch: convex/ changed -> redeploy
+git push                                 # the lane follows the branch: backend path changed -> redeploy
 lane wait --sha HEAD                     # block until your commit is live
 lane key                                 # 4h deploy key scoped to this lane (.lane/deploy-key)
 lane run seed:run '{"n":5}'               # run a Convex function on this branch's lane
@@ -149,7 +149,10 @@ npx convex run admin:setLaneEnvAllow '{"repo":"owner/app","laneEnvAllow":{"SITE_
 ```
 
 In the app repo, commit `.lane.json` (`{"repo": "owner/app", "url": "https://<control-plane>.convex.site"}`)
-and give each agent environment `LANE_TOKEN`.
+and give each agent environment `LANE_TOKEN`. If the Convex bundle imports code outside `convex/`, list
+everything it can include as `backendPaths` (a trailing slash is a directory, anything else one file, e.g.
+`["convex/", "lib/", "package-lock.json"]`): a push that changes none of them is marked live without a
+deploy, and an in-place deploy refuses a checkout with uncommitted changes in them.
 
 ## Not in v0
 
