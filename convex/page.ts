@@ -36,6 +36,10 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .s-failed .dot { background: var(--bad); }
   .row { display:flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .err { color: var(--bad); white-space: pre-wrap; }
+  .grow { flex: 1; }
+  button.ghost { background: transparent; color: var(--fg); padding: 5px 12px; font-size: 13px; }
+  button.ghost:hover { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
   .banner { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); font-size: 13.5px; }
   .banner.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); background: color-mix(in srgb, var(--bad) 6%, transparent); }
   .banner summary { cursor: pointer; }
@@ -123,8 +127,9 @@ let TOKEN = token();
 const params = new URLSearchParams(location.search);
 const repo = params.get("repo"), branch = params.get("branch");
 
-async function api(path) {
-  const r = await fetch(path, { headers: { authorization: "Bearer " + TOKEN } });
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { authorization: "Bearer " + TOKEN, "content-type": "application/json" }, body: JSON.stringify(body) }
+    : { headers: { authorization: "Bearer " + TOKEN } });
   const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j;
 }
 
@@ -212,7 +217,13 @@ function build(events) {
           steps: [{ at: e.at, text: name + (d === "re-provisioning" ? " reopened the lane after an earlier one was deleted" : " opened the lane") }] });
         break;
       case "revived":
-        add({ key: "r" + e.at, kind: "revived", phase: "setup", actor: e.actor, start: e.at, end: e.at, status: "done" });
+        // Restored in the grace period: the shutdown stops, and the lane carries on in development.
+        if (teardown && teardown.status === "running") {
+          teardown.status = "cancelled"; teardown.end = e.at;
+          teardown.steps.push({ at: e.at, text: "Restored by " + name + "; the backend was kept" });
+          teardown = null;
+        }
+        add({ key: "r" + e.at, kind: "revived", phase: "dev", actor: e.actor, start: e.at, end: e.at, status: "done" });
         break;
       case "ready": {
         const it = backend || add({ key: "b" + e.at, kind: "backend", phase: "setup", start: e.at, status: "running", bar: true });
@@ -313,7 +324,7 @@ function build(events) {
 function titleOf(it) {
   switch (it.kind) {
     case "backend": return "Backend created" + (it.dep ? '<span class="meta">' + esc(it.dep) + '</span>' : "");
-    case "revived": return "Lane reopened" + '<span class="meta">kept the old backend</span>';
+    case "revived": return "Lane restored" + who(it.actor) + '<span class="meta">kept the old backend</span>';
     case "deploy": {
       const what = it.status === "skipped" ? "Deploy skipped" : it.phase === "setup" ? "First deploy" : "Deploy";
       const meta = it.status === "skipped" ? "folded into the next deploy" : it.seeded ? "with seed" : it.status === "queued" ? "queued" : "";
@@ -321,8 +332,8 @@ function titleOf(it) {
     }
     case "push": return "Frontend push " + code(it.sha || "?") + who(it.actor) + '<span class="meta">no deploy needed</span>';
     case "agent": return '<span class="agname">' + esc(actorName(it.actor)) + '</span><span class="meta">' + esc(it.task) + (it.status === "running" ? ' · <span style="color:var(--ok)">working</span>' : "") + '</span>';
-    case "teardown": return (it.status === "done" ? "Lane shut down" : "Shutting down") + who(it.actor) +
-      '<span class="meta">' + esc(it.reason || "") + (it.status !== "done" && it.grace ? " · backend deleted " + dur(Math.max(0, it.start + it.grace - Date.now())) + " from now" : "") + '</span>';
+    case "teardown": return (it.status === "done" ? "Lane shut down" : it.status === "cancelled" ? "Archived, then restored" : "Shutting down") + who(it.actor) +
+      '<span class="meta">' + esc(it.reason || "") + (it.status === "running" && it.grace ? " · backend deleted " + dur(Math.max(0, it.start + it.grace - Date.now())) + " from now" : "") + '</span>';
     default: return esc(it.type) + who(it.actor) + '<span class="meta">' + esc(it.detail) + '</span>';
   }
 }
@@ -354,7 +365,7 @@ function renderTimeline(items) {
       const nf = its.filter((i) => i.kind === "push").length;
       const med = nd.length ? nd.map(len).sort((a, b) => a - b)[Math.floor(nd.length / 2)] : null;
       sum = [na.length + " agent" + (na.length === 1 ? "" : "s"), nd.length + " deploy" + (nd.length === 1 ? "" : "s") + (med != null ? ", typically " + dur(med) : ""), nf ? nf + " frontend push" + (nf === 1 ? "" : "es") : ""].filter(Boolean).join(" · "); }
-    if (p.id === "wind") { const td = its.find((i) => i.kind === "teardown"); sum = td && td.status === "done" ? "backend deleted" : "in grace period"; }
+    if (p.id === "wind") { const td = its.find((i) => i.kind === "teardown"); sum = td && td.status === "done" ? "backend deleted" : its.every((i) => i.kind !== "teardown" || i.status === "cancelled") ? "restored" : "in grace period"; }
     h += '<details class="phase ' + p.id + '" data-phase="' + p.id + '"' + (CLOSED.has(p.id) ? "" : " open") + '><summary>' +
       '<span class="caret">▶</span><span class="ph-mark"></span><span class="ph-name">' + p.label + '</span>' +
       '<span class="ph-sum">' + sum + '</span><span class="ph-dur">' + (live ? "running · " : "") + dur(t1 - t0) + '</span></summary><ol class="items">';
@@ -389,7 +400,11 @@ function renderLane(v) {
   const live = l.deployedSha && l.deployedSha === l.headSha;
   const deployState = (l.state === "deleted" || l.state === "archived") ? "" : l.deploying ? pill("deploying", "deploying " + short(l.deploying.sha)) : live ? pill("ready", "live = HEAD") : l.headSha ? pill("waiting", "behind HEAD") : pill("waiting", "nothing pushed");
   let h = '<div class="crumbs sub"><a href="/">Lanes</a> / ' + esc(l.repo) + '</div>';
-  h += '<div class="row"><h1>' + esc(l.branch) + '</h1>' + pill(l.state) + deployState + '</div>';
+  const gone = l.state === "archived" || l.state === "deleted";
+  const action = l.pool ? "" : gone
+    ? '<button class="ghost" data-lane-act="restore" title="' + (l.state === "archived" ? "Same backend, kept during the grace period" : "Its backend was deleted; this makes a new one") + '">Restore</button>'
+    : (l.state === "ready" || l.state === "failed") ? '<button class="ghost" data-lane-act="archive">Archive</button>' : "";
+  h += '<div class="row"><h1>' + esc(l.branch) + '</h1>' + pill(l.state) + deployState + '<span class="grow"></span>' + action + '</div>';
   // A failed deploy's log lives on its timeline row; up here, one line, and only while the
   // newest deploy is the failed one. A lane that failed to provision shows its first line.
   const deploys = items.filter((i) => i.kind === "deploy");
@@ -430,6 +445,15 @@ function renderLane(v) {
     '<b>Created</b><span>' + esc(l.createdBy) + ', ' + new Date(l.createdAt).toLocaleString() + '</span></div>';
   $("#app").innerHTML = h;
   for (const d of document.querySelectorAll("details[data-key]")) d.ontoggle = () => { d.open ? OPEN.add(d.dataset.key) : OPEN.delete(d.dataset.key); };
+  for (const b of document.querySelectorAll("[data-lane-act]")) b.onclick = async () => {
+    const restore = b.dataset.laneAct === "restore";
+    if (!restore && !confirm("Archive " + l.branch + "? Its keys are revoked now and its backend is deleted after the grace period. Restore, a push or a reopened PR brings it back.")) return;
+    b.disabled = true;
+    try {
+      await api(restore ? "/api/lane/ensure" : "/api/lane/down", restore ? { repo: l.repo, branch: l.branch } : { repo: l.repo, branch: l.branch, reason: "archived from the lane page" });
+      await tick();
+    } catch (e) { b.disabled = false; alert(String(e.message || e)); }
+  };
   for (const a of document.querySelectorAll("[data-goto]")) a.onclick = (ev) => {
     ev.preventDefault();
     const d = document.querySelector('details[data-key="' + CSS.escape(a.dataset.goto) + '"]');

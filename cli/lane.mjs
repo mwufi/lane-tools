@@ -30,7 +30,8 @@ Usage: lane <command> [options]
   heartbeat [--status working|waiting|done] [--task "..."]
   leave                   Mark this agent done
   env NAME=value ...      Set allow-listed env vars on this lane (e.g. SITE_URL of the branch preview)
-  down                    Archive the lane: revoke keys now, delete the deployment after grace
+  down | archive          Archive the lane: revoke keys now, delete the deployment after grace
+  restore                 Bring an archived lane back (same deployment within grace), like up
   page                    Print the lane page URL
   pool [fill [--sha <sha>]]  Show the repo's warm spares; fill deploys <sha> (default HEAD) to them
   pr-status [--pr N]      Post or update the lane status comment on the branch's PR (needs GITHUB_TOKEN)
@@ -1052,6 +1053,8 @@ const commands = {
   leave: () => heartbeat("done"),
   env,
   down,
+  archive: down,
+  restore: () => up(),
   page: async () => console.log(pageUrl(repoId(), branchName())),
   pool,
   "pr-status": prStatus,
