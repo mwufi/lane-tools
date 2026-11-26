@@ -64,6 +64,15 @@ function optStr(b: Record<string, unknown>, k: string): string | undefined {
   return b[k] === undefined || b[k] === null ? undefined : str(b, k);
 }
 
+function optMs(b: Record<string, unknown>, k: string): number | undefined {
+  const val = b[k];
+  if (val === undefined || val === null) return undefined;
+  if (typeof val !== "number" || !Number.isFinite(val) || val < 0 || val > 86_400_000) {
+    throw new HttpError(400, `"${k}" must be a duration in milliseconds`);
+  }
+  return Math.round(val);
+}
+
 function bool(b: Record<string, unknown>, k: string): boolean {
   return b[k] === true;
 }
@@ -840,8 +849,18 @@ route("/api/seed/snapshot", "POST", async (ctx, req) => {
     sha: str(b, "sha"),
     tree: optStr(b, "tree"),
     storageId: str(b, "storageId") as Id<"_storage">,
+    setupMs: optMs(b, "setupMs"),
     createdBy: optStr(b, "holder") ?? person,
   });
+  return { ok: true };
+});
+
+route("/api/seed/import", "POST", async (ctx, req) => {
+  await authed(ctx, req);
+  const b = await body(req);
+  const importMs = optMs(b, "importMs");
+  if (importMs === undefined) throw new HttpError(400, "importMs is required");
+  await ctx.runMutation(internal.seed.recordImport, { repo: str(b, "repo"), sha: str(b, "sha"), importMs });
   return { ok: true };
 });
 

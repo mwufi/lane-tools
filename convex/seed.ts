@@ -17,7 +17,16 @@ export const latest = internalQuery({
     if (!s) return null;
     const url = await ctx.storage.getUrl(s.storageId);
     if (!url) return null;
-    return { sha: s.sha, tree: s.tree ?? null, bytes: s.bytes, at: s.at, createdBy: s.createdBy, url };
+    return {
+      sha: s.sha,
+      tree: s.tree ?? null,
+      bytes: s.bytes,
+      at: s.at,
+      createdBy: s.createdBy,
+      setupMs: s.setupMs ?? null,
+      importMs: s.importMs ?? null,
+      url,
+    };
   },
 });
 
@@ -27,6 +36,7 @@ export const record = internalMutation({
     sha: v.string(),
     tree: v.optional(v.string()),
     storageId: v.id("_storage"),
+    setupMs: v.optional(v.number()),
     createdBy: v.string(),
   },
   returns: v.null(),
@@ -45,6 +55,21 @@ export const record = internalMutation({
       if (await ctx.db.system.get("_storage", old.storageId)) await ctx.storage.delete(old.storageId);
       await ctx.db.delete("seedSnapshots", old._id);
     }
+    return null;
+  },
+});
+
+// The deployer reports how long an import of the repo's newest snapshot took.
+export const recordImport = internalMutation({
+  args: { repo: v.string(), sha: v.string(), importMs: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { repo, sha, importMs }) => {
+    const s = await ctx.db
+      .query("seedSnapshots")
+      .withIndex("by_repo", (q) => q.eq("repo", repo))
+      .order("desc")
+      .first();
+    if (s && s.sha === sha) await ctx.db.patch("seedSnapshots", s._id, { importMs });
     return null;
   },
 });
