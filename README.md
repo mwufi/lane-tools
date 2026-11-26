@@ -57,8 +57,8 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
   lane claims the oldest warm spare in the same transaction as `ensure`: it starts seeded and running
   `main`, the deployment's `LANE_BRANCH` is updated, and the branch's head arrives as a push, so a branch
   that doesn't change `convex/` is live at once and one that does gets a single deploy (no setup functions:
-  the spare was seeded from `main`). With no warm spare, the lane starts cold as before. A claimed spare
-  keeps its `preview/pool-<id>` name in the Convex dashboard.
+  the spare was seeded from `main`). The claimed deployment is renamed `preview/<branch>` in the Convex
+  dashboard. With no warm spare, the lane starts cold as before.
 
 ## Setup (once per team)
 

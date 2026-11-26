@@ -38,6 +38,11 @@ export async function createDeployment(projectId: number, reference: string, tok
   }, token);
 }
 
+/** Rename a deployment (its "reference"), e.g. when a warm-pool spare is claimed by a branch. */
+export async function setDeploymentReference(name: string, reference: string, token?: string): Promise<void> {
+  await call("PATCH", `/deployments/${name}`, { reference }, token);
+}
+
 export async function deleteDeployment(name: string, token?: string): Promise<void> {
   await call("POST", `/deployments/${name}/delete`, undefined, token);
 }

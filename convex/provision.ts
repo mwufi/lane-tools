@@ -7,6 +7,7 @@ import {
   createDeployKey,
   createDeployment,
   deleteDeployKey,
+  setDeploymentReference,
   deleteDeployment,
   setDeploymentEnv,
   inspectTeamToken,
@@ -114,6 +115,22 @@ export const setLaneEnv = internalAction({
     } finally {
       await deleteDeployKey(deploymentName, keyName, teamToken).catch(() => {});
     }
+    return null;
+  },
+});
+
+/** A claimed warm-pool spare takes its branch's name in the Convex dashboard ("preview/<branch>"). */
+export const renameForBranch = internalAction({
+  args: { deploymentName: v.string(), branch: v.string(), repo: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { deploymentName, branch, repo }) => {
+    const token = await repoToken(ctx, repo);
+    const reference = previewReference(branch);
+    // Taken (Convex's own preview for the branch, or a lane in its grace period): add a suffix.
+    await setDeploymentReference(deploymentName, reference, token).catch((e) => {
+      if (!/-> 4\d\d/.test(String(e))) throw e;
+      return setDeploymentReference(deploymentName, `${reference.slice(0, 90)}-${Date.now().toString(36)}`, token);
+    });
     return null;
   },
 });

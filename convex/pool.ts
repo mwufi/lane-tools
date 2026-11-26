@@ -93,6 +93,11 @@ export async function claimSpare(
     vars: { ...(lane.env ?? {}), LANE_BRANCH: args.branch },
     repo: args.repo,
   });
+  await ctx.scheduler.runAfter(0, internal.provision.renameForBranch, {
+    deploymentName: spare.deploymentName!,
+    branch: args.branch,
+    repo: args.repo,
+  });
   await ctx.scheduler.runAfter(0, internal.pool.refill, { repo: args.repo });
   return laneId;
 }
