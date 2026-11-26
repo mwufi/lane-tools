@@ -301,14 +301,14 @@ export const push = internalMutation({
     const lockHeld = lane.lock !== undefined && lane.lock.expiresAt > now;
     const backendCurrent = lane.deployedSha !== undefined && lane.deployedSha === lane.headSha;
     if (!args.convexChanged && backendCurrent && !lockHeld) {
-      // Nothing under convex/ changed: the running backend already matches this commit.
+      // Nothing the bundle includes changed: the running backend already matches this commit.
       await ctx.db.patch("lanes", lane._id, {
         headSha: args.sha,
         headConvexChanged: false,
         deployedSha: args.sha,
         lastActivity: now,
       });
-      await logEvent(ctx, lane._id, "push", args.actor, `${args.sha.slice(0, 7)} (convex/ unchanged, no deploy)`);
+      await logEvent(ctx, lane._id, "push", args.actor, `${args.sha.slice(0, 7)} (backend unchanged, no deploy)`);
       return { lane: true, deployNeeded: false };
     }
     await ctx.db.patch("lanes", lane._id, {
@@ -321,7 +321,7 @@ export const push = internalMutation({
       lane._id,
       "push",
       args.actor,
-      `${args.sha.slice(0, 7)}${args.convexChanged ? " (convex/ changed)" : ""}`,
+      `${args.sha.slice(0, 7)}${args.convexChanged ? " (backend changed)" : ""}`,
     );
     return { lane: true, deployNeeded: lane.state === "ready" };
   },
