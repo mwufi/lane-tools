@@ -673,6 +673,18 @@ route("/api/lane/down", "POST", async (ctx, req) => {
   return res ?? { alreadyDown: true };
 });
 
+// The PR status step (or anything with the branch's PR in hand) reports it for the lane page.
+route("/api/lane/pr", "POST", async (ctx, req) => {
+  await authed(ctx, req);
+  const b = await body(req);
+  const number = Number(b.number);
+  if (!Number.isInteger(number) || number <= 0) throw new HttpError(400, "number must be a PR number");
+  const state = str(b, "state");
+  if (!["open", "draft", "merged", "closed"].includes(state)) throw new HttpError(400, "state must be open, draft, merged or closed");
+  await ctx.runMutation(internal.lanes.setPr, { repo: str(b, "repo"), branch: str(b, "branch"), number, state, title: optStr(b, "title") });
+  return { ok: true };
+});
+
 route("/api/lane/key", "POST", async (ctx, req) => {
   const person = await authed(ctx, req);
   const b = await body(req);
@@ -959,6 +971,13 @@ http.route({
             headSha: p.pull_request?.head?.sha,
             actor: `github/${p.sender?.login ?? "unknown"}`,
           });
+          if (typeof p.pull_request?.number === "number") {
+            await ctx.runMutation(internal.lanes.setPr, {
+              repo, branch, number: p.pull_request.number,
+              state: p.pull_request.draft ? "draft" : "open",
+              title: typeof p.pull_request.title === "string" ? p.pull_request.title : undefined,
+            });
+          }
           return await done(200, res, `PR ${p.action} on ${branch}: lane ${res.created ? "created" : "kept"}`);
         }
         if (p.action === "closed") {
