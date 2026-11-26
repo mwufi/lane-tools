@@ -15,6 +15,8 @@ git push                                 # the lane follows the branch: convex/ 
 lane wait --sha HEAD                     # block until your commit is live
 lane key                                 # 4h deploy key scoped to this lane (.lane/deploy-key)
 lane run seed:run '{"n":5}'               # run a Convex function on this branch's lane
+lane reset --table votes                 # empty tables the lane's keys can't (e.g. rows blocking a schema change)
+lane reset --snapshot                    # replace the lane's data with the repo's newest seed snapshot
 lane leave / lane down                   # done / archive the lane (deployment deleted after grace)
 ```
 
