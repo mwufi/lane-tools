@@ -36,6 +36,9 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .s-failed .dot { background: var(--bad); }
   .row { display:flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .err { color: var(--bad); white-space: pre-wrap; }
+  .banner { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); font-size: 13.5px; }
+  .banner.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); background: color-mix(in srgb, var(--bad) 6%, transparent); }
+  .banner summary { cursor: pointer; }
   input { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); width: 100%; max-width: 420px; }
   button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--accent); color: #fff; cursor: pointer; }
   .crumbs { font-size: 12.5px; margin-bottom: 8px; }
@@ -88,7 +91,7 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .steps li { display:grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 2px 0; color: var(--muted); }
   .steps li span:last-child { color: var(--fg); min-width: 0; }
   .steps .off { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--faint); text-align: right; }
-  .log { white-space: pre-wrap; font-size: 11.5px; margin: 2px 0 0; color: var(--bad); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .log { white-space: pre-wrap; max-height: 360px; overflow: auto; font-size: 11.5px; margin: 2px 0 0; color: var(--bad); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .empty { padding: 14px; color: var(--muted); }
   .kvs { display:grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 12.5px; }
   .kvs b { color: var(--muted); font-weight: 500; }
@@ -387,7 +390,17 @@ function renderLane(v) {
   const deployState = (l.state === "deleted" || l.state === "archived") ? "" : l.deploying ? pill("deploying", "deploying " + short(l.deploying.sha)) : live ? pill("ready", "live = HEAD") : l.headSha ? pill("waiting", "behind HEAD") : pill("waiting", "nothing pushed");
   let h = '<div class="crumbs sub"><a href="/">Lanes</a> / ' + esc(l.repo) + '</div>';
   h += '<div class="row"><h1>' + esc(l.branch) + '</h1>' + pill(l.state) + deployState + '</div>';
-  if (l.error) h += '<p class="err">' + esc(l.error) + '</p>';
+  // A failed deploy's log lives on its timeline row; up here, one line, and only while the
+  // newest deploy is the failed one. A lane that failed to provision shows its first line.
+  const deploys = items.filter((i) => i.kind === "deploy");
+  const lastDeploy = deploys[deploys.length - 1];
+  if (l.state === "failed" && l.error) {
+    h += '<details class="banner bad"><summary>Setup failed: ' + esc(String(l.error).split("\\n")[0].slice(0, 200)) + '</summary><pre class="log">' + esc(l.error) + '</pre></details>';
+  } else if (lastDeploy && lastDeploy.status === "failed") {
+    h += '<p class="banner bad">Last deploy <code>' + esc(short(lastDeploy.sha)) + '</code> failed' +
+      (l.deployedSha ? '; the lane still runs <code>' + esc(short(l.deployedSha)) + '</code>' : '') +
+      '. <a href="#" data-goto="' + esc(lastDeploy.key) + '">See the error</a></p>';
+  }
   // at-a-glance numbers
   const done = items.filter((i) => i.kind === "deploy" && i.status === "done");
   const setup = items.filter((i) => i.phase === "setup");
@@ -417,6 +430,15 @@ function renderLane(v) {
     '<b>Created</b><span>' + esc(l.createdBy) + ', ' + new Date(l.createdAt).toLocaleString() + '</span></div>';
   $("#app").innerHTML = h;
   for (const d of document.querySelectorAll("details[data-key]")) d.ontoggle = () => { d.open ? OPEN.add(d.dataset.key) : OPEN.delete(d.dataset.key); };
+  for (const a of document.querySelectorAll("[data-goto]")) a.onclick = (ev) => {
+    ev.preventDefault();
+    const d = document.querySelector('details[data-key="' + CSS.escape(a.dataset.goto) + '"]');
+    if (!d) return;
+    const ph = d.closest("details[data-phase]");
+    if (ph) ph.open = true;
+    d.open = true;
+    d.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
   for (const d of document.querySelectorAll("details[data-phase]")) d.ontoggle = () => { d.open ? CLOSED.delete(d.dataset.phase) : CLOSED.add(d.dataset.phase); };
   document.title = l.branch + " · lane";
 }
