@@ -71,8 +71,10 @@ export const repos = internalQuery({
         warmSpares: lanes.filter((l) => l.pool && l.state === "ready" && l.seeded && !(l.lock && l.lock.expiresAt > now)).length,
         // Spares on their way: being created, or created and not yet deployed, seeded or done deploying.
         warmingSpares: lanes.filter((l) => l.pool && (l.state === "provisioning" ||
-          (l.state === "ready" && (!l.seeded || (l.lock && l.lock.expiresAt > now))))).length,
-        failedSpares: lanes.filter((l) => l.pool && l.state === "failed").length,
+          (l.state === "ready" && (l.lock && l.lock.expiresAt > now ? true : !l.seeded && !l.error)))).length,
+        // Failed to create, or its last deploy failed before it was ever seeded.
+        failedSpares: lanes.filter((l) => l.pool && (l.state === "failed" ||
+          (l.state === "ready" && !l.seeded && !!l.error && !(l.lock && l.lock.expiresAt > now)))).length,
         openLanes: lanes.filter((l) => !l.pool && l.state !== "deleted" && l.state !== "archived").length,
       });
     }
