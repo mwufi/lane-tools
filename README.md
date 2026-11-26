@@ -64,9 +64,10 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
   dashboard. With no warm spare, the lane starts cold as before.
 - Seed snapshots: a lane's first deploy imports the repo's newest seed snapshot (`npx convex import
   --replace-all`, with its own 31-minute key) instead of running every setup function, and falls back to
-  the setup functions if there is none or the import fails. The repo's first seeded lane exports the first
-  snapshot; after that `lane pool fill` re-seeds one spare from scratch whenever `convex/` differs from what
-  the snapshot was seeded from, and exports a fresh one. The newest two are kept.
+  the setup functions if there is none or the import fails. Only `lane pool fill` (the default branch) makes
+  snapshots: it re-seeds one spare from scratch when there is none or `convex/` differs from what the
+  snapshot was seeded from, and exports a fresh one. Branch lanes never export. With the warm pool off,
+  there are no snapshots and lanes run the setup functions. The newest two are kept.
 
 ## Setup (once per team)
 
