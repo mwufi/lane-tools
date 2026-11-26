@@ -561,7 +561,26 @@ async function deploy(repo, branch) {
       run("npx", ["convex", "deploy", "-y", ...(claim.deployArgs || [])], dir, env);
       detail = `deploy ${secs(Date.now() - tDeploy)}`;
       const setup = claim.setupFunctions || (claim.seedFunction ? [claim.seedFunction] : []);
-      if (setup.length) {
+      // A first deploy imports the repo's seed snapshot when there is one, instead of running
+      // every setup function. `lane pool fill` instead re-seeds from scratch when convex/ has
+      // changed since the snapshot, then exports a fresh one for everyone after it.
+      const tree = git(["rev-parse", `${sha}:convex`], { cwd: dir });
+      // The first lane of a repo makes its first snapshot; after that only the pool filler
+      // refreshes it (once per run), when convex/ differs from what the snapshot was seeded from.
+      const refresh = !!(claim.needSeed && claim.seedKey && (!claim.snapshot ||
+        (snapshotFill && !snapshotFill.done && tree && claim.snapshot.tree !== tree)));
+      let imported = false;
+      if (claim.needSeed && claim.snapshot && claim.seedKey && !refresh) {
+        const tImport = Date.now();
+        try {
+          await importSnapshot(claim.snapshot, claim.seedKey, dir);
+          imported = seeded = true;
+          detail += `, seed snapshot ${short(claim.snapshot.sha)} imported ${secs(Date.now() - tImport)}`;
+        } catch (e) {
+          log(`  seed snapshot import failed, running the setup functions instead: ${String(e.message || e).split("\n").slice(-3).join(" ")}`);
+        }
+      }
+      if (!imported && setup.length) {
         const tSeed = Date.now();
         const url = (await getLane(repo, branch)).lane.deploymentUrl;
         const slow = [];
@@ -573,6 +592,16 @@ async function deploy(repo, branch) {
         seeded = true;
         detail += `, setup (${setup.length} fn) ${secs(Date.now() - tSeed)}`;
         if (setup.length > 1) log(`  setup: ${slow.join(", ")}`);
+        if (refresh) {
+          try {
+            const tExport = Date.now();
+            await exportSnapshot(repo, sha, tree, claim.seedKey, dir);
+            if (snapshotFill) snapshotFill.done = true;
+            log(`  exported a fresh seed snapshot in ${secs(Date.now() - tExport)}`);
+          } catch (e) {
+            log(`  couldn't export a seed snapshot (lanes keep running setup functions): ${String(e.message || e).split("\n").slice(-3).join(" ")}`);
+          }
+        }
       }
       // `convex deploy` regenerates convex/_generated; don't leave that diff in someone's checkout.
       if (inPlace) git(["checkout", "--", "convex/_generated"], { cwd: repoRoot });
@@ -595,6 +624,40 @@ async function deploy(repo, branch) {
     }
     if (!fin.again) return true;
     log(`  branch moved during deploy; deploying newest HEAD`);
+  }
+}
+
+// ---------------------------------------------------------------- seed snapshots
+
+let snapshotFill = null; // set by `lane pool fill`: { done } once it has exported a fresh snapshot
+
+async function importSnapshot(snap, seedKey, dir) {
+  const res = await fetch(snap.url);
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}.zip`);
+  fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+  try {
+    const env = { ...process.env, CONVEX_DEPLOY_KEY: seedKey };
+    delete env.CONVEX_DEPLOYMENT;
+    run("npx", ["convex", "import", "--replace-all", "-y", tmp], dir, env);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+async function exportSnapshot(repo, sha, tree, seedKey, dir) {
+  const tmp = path.join(os.tmpdir(), `lane-seed-${process.pid}-${Date.now()}.zip`);
+  try {
+    const env = { ...process.env, CONVEX_DEPLOY_KEY: seedKey };
+    delete env.CONVEX_DEPLOYMENT;
+    run("npx", ["convex", "export", "--include-file-storage", "--path", tmp], dir, env);
+    const { url } = await api("POST", "/api/seed/upload-url", {});
+    const up = await fetch(url, { method: "POST", headers: { "Content-Type": "application/zip" }, body: fs.readFileSync(tmp) });
+    if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
+    const { storageId } = await up.json();
+    await api("POST", "/api/seed/snapshot", { repo, sha, tree: tree || undefined, storageId });
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
 }
 
@@ -789,6 +852,7 @@ async function pool() {
   if (!sha) die("no commit to deploy; pass --sha");
   const todo = p.spares.filter((s) => s.state === "ready" && !(s.seeded && s.deployedSha === sha));
   if (!todo.length) return log(`pool: ${p.spares.length} spare(s), all warm at ${short(sha)}`);
+  snapshotFill = { done: false };
   let failed = 0;
   for (const s of todo) {
     log(`pool: ${s.branch} (${s.deploymentName})`);

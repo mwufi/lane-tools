@@ -37,6 +37,7 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 | `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, archives on PR close or branch delete. |
 | `templates/lane-pool.yml` | GitHub Action that keeps the warm pool deployed from `main` and seeded. |
 | `convex/pool.ts` | Warm pool: spare lanes per repo that a new lane claims instead of starting cold. |
+| `convex/seed.ts` | Seed snapshots: a new lane imports the repo's newest snapshot instead of running every setup function. |
 | `examples/pingpal/` | "Message your friends" sample app used by the demo. |
 | `demo/` | `setup-remote.sh` (a bare git repo + post-receive hook standing in for GitHub), `e2e.sh`, `screenshot.mjs`. |
 
@@ -59,6 +60,11 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
   that doesn't change `convex/` is live at once and one that does gets a single deploy (no setup functions:
   the spare was seeded from `main`). The claimed deployment is renamed `preview/<branch>` in the Convex
   dashboard. With no warm spare, the lane starts cold as before.
+- Seed snapshots: a lane's first deploy imports the repo's newest seed snapshot (`npx convex import
+  --replace-all`, with its own 31-minute key) instead of running every setup function, and falls back to
+  the setup functions if there is none or the import fails. The repo's first seeded lane exports the first
+  snapshot; after that `lane pool fill` re-seeds one spare from scratch whenever `convex/` differs from what
+  the snapshot was seeded from, and exports a fresh one. The newest two are kept.
 
 ## Setup (once per team)
 

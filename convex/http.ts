@@ -758,13 +758,59 @@ route("/api/deploy/claim", "POST", async (ctx, req) => {
     purpose: "deployer",
   });
   const cfg = await ctx.runQuery(internal.admin.repoConfig, { repo });
+  // A first deploy can import the repo's seed snapshot instead of running the setup functions.
+  // Its key is separate and optional: without it the deployer just runs the setup functions.
+  let snapshot = null;
+  let seedKey: string | null = null;
+  if (claim.needSeed) {
+    snapshot = await ctx.runQuery(internal.seed.latest, { repo });
+    try {
+      seedKey = (await ctx.runAction(internal.provision.mintKey, {
+        laneId: claim.laneId,
+        deploymentName: claim.deploymentName,
+        holder,
+        purpose: "seed",
+      })).key;
+    } catch (e) {
+      console.warn(`no seed key for ${repo}: ${errMsg(e)}`);
+    }
+  }
   return {
     status: claim.status,
     sha: claim.sha,
     deployKey: minted.key,
+    needSeed: claim.needSeed,
     setupFunctions: claim.needSeed ? cfg?.setupFunctions ?? [] : [],
     deployArgs: cfg?.deployArgs ?? [],
+    snapshot,
+    seedKey,
   };
+});
+
+// Seed snapshots: the deployer uploads a fresh lane's export (upload URL, then record it).
+route("/api/seed/upload-url", "POST", async (ctx, req) => {
+  await authed(ctx, req);
+  return { url: await ctx.storage.generateUploadUrl() };
+});
+
+route("/api/seed/snapshot", "POST", async (ctx, req) => {
+  const person = await authed(ctx, req);
+  const b = await body(req);
+  await ctx.runMutation(internal.seed.record, {
+    repo: str(b, "repo"),
+    sha: str(b, "sha"),
+    tree: optStr(b, "tree"),
+    storageId: str(b, "storageId") as Id<"_storage">,
+    createdBy: optStr(b, "holder") ?? person,
+  });
+  return { ok: true };
+});
+
+route("/api/seed/latest", "GET", async (ctx, req) => {
+  await authed(ctx, req);
+  const repo = new URL(req.url).searchParams.get("repo");
+  if (!repo) throw new HttpError(400, "repo is required");
+  return { snapshot: await ctx.runQuery(internal.seed.latest, { repo }) };
 });
 
 route("/api/deploy/finish", "POST", async (ctx, req) => {

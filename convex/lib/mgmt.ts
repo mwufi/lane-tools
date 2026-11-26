@@ -56,6 +56,16 @@ export const DEPLOYER_ACTIONS = [
   "deployment:functions:runInternalActions",
 ];
 
+// Importing and exporting seed snapshots (`npx convex import` / `export`), on its own short-lived key
+// so a deploy never depends on these permissions.
+export const SEED_ACTIONS = [
+  "deployment:backups:create",
+  "deployment:backups:download",
+  "deployment:backups:import",
+  "deployment:data:view",
+  "deployment:data:write",
+];
+
 export const AGENT_ACTIONS = [
   ...DEPLOYER_ACTIONS,
   "deployment:data:view",
