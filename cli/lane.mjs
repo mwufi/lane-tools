@@ -291,7 +291,8 @@ function backendPaths(sha) {
     }
   }
   const paths = Array.isArray(cfg.backendPaths) ? cfg.backendPaths.filter((p) => typeof p === "string" && p) : [];
-  return paths.length ? paths : ["convex/"];
+  // `:(top)` anchors each path at the repo root, so `lane push` from a subdirectory still sees them.
+  return (paths.length ? paths : ["convex/"]).map((p) => `:(top)${p}`);
 }
 
 // Tell lane-control the branch moved. Nothing in backendPaths changed -> no deploy needed.
@@ -746,7 +747,7 @@ function cleanCheckoutAt(sha) {
   if (!repoRoot || git(["rev-parse", "HEAD"]) !== sha) return false;
   if (!fs.existsSync(path.join(repoRoot, "node_modules"))) return false;
   // Anything uncommitted in what the bundle can include, or in package files, would leak into the deploy.
-  const dirty = git(["status", "--porcelain", "--untracked-files=all", "--", ...backendPaths(sha), "package.json", "package-lock.json"]);
+  const dirty = git(["status", "--porcelain", "--untracked-files=all", "--", ...backendPaths(sha), ":(top)package.json", ":(top)package-lock.json"]);
   return dirty === "";
 }
 
