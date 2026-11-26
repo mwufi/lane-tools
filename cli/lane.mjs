@@ -922,7 +922,12 @@ async function pool() {
   const p = await api("GET", `/api/pool?repo=${encodeURIComponent(repo)}`);
   if (sub !== "fill") {
     if (args.json) return console.log(JSON.stringify(p, null, 2));
-    log(`${repo}: pool size ${p.poolSize}${p.poolSize ? "" : " (off; an admin sets it in the panel)"}`);
+    const warm = p.spares.filter((s) => s.state === "ready" && s.seeded && !s.deploying).length;
+    const failed = p.spares.filter((s) => s.state === "failed").length;
+    const warming = p.spares.filter((s) => s.state === "provisioning" || s.state === "ready").length - warm;
+    log(p.poolSize
+      ? `${repo}: warm pool ${warm}/${p.poolSize} ready, ${warming} warming, ${failed} failed`
+      : `${repo}: warm pool off (an admin sets its size in the panel)`);
     for (const s of p.spares) {
       const what = s.state !== "ready" ? s.state : s.deploying ? `deploying ${short(s.deploying)}` : s.seeded ? `warm at ${short(s.deployedSha)}` : "waiting for first deploy";
       log(`  ${s.branch.padEnd(16)} ${(s.deploymentName || "").padEnd(28)} ${what}${s.error ? ` (${s.error.slice(0, 80)})` : ""}`);
