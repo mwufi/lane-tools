@@ -31,6 +31,7 @@ Usage: lane <command> [options]
   down                    Archive the lane: revoke keys now, delete the deployment after grace
   page                    Print the lane page URL
   pool [fill [--sha <sha>]]  Show the repo's warm spares; fill deploys <sha> (default HEAD) to them
+  pr-status [--pr N]      Post or update the lane status comment on the branch's PR (needs GITHUB_TOKEN)
   hook post-receive       Git post-receive hook: report pushes and run the deployer
 
 Common options: --repo owner/name  --branch name  --json
@@ -862,6 +863,84 @@ async function pool() {
   if (failed) die(`${failed} spare(s) failed to deploy`);
 }
 
+// ---------------------------------------------------------------- PR status comment
+
+// One comment per PR, edited in place, saying where the branch's lane is and whether it's live.
+// Runs in CI after `lane up` with GITHUB_TOKEN (pull-requests: write); `--pr N` picks the PR,
+// otherwise the open PR whose head is this branch.
+const PR_MARKER = "<!-- lane-status -->";
+
+async function gh(method, p, body) {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (!token) die("GITHUB_TOKEN is not set");
+  const res = await fetch(`${process.env.GITHUB_API_URL || "https://api.github.com"}${p}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lane-tools" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`GitHub ${method} ${p} -> ${res.status}: ${text.slice(0, 200)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+function prStatusBody(repo, branch, v) {
+  const l = v.lane;
+  const when = (t) => (t ? new Date(t).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "");
+  const state =
+    l.state === "ready"
+      ? l.deploying
+        ? `deploying \`${short(l.deploying.sha)}\``
+        : l.headSha && l.deployedSha !== l.headSha
+          ? `behind: running \`${short(l.deployedSha)}\`, branch is at \`${short(l.headSha)}\``
+          : `live at \`${short(l.deployedSha)}\``
+      : l.state;
+  const ok = l.state === "ready" && !l.deploying && (!l.headSha || l.deployedSha === l.headSha) && !l.error;
+  const rows = [
+    ["Status", `${ok ? "🟢" : l.state === "failed" || l.error ? "🔴" : "🟡"} ${state}`],
+    ["Backend", l.deploymentUrl ? `[${l.deploymentName}](${l.dashboardUrl}) · \`${l.deploymentUrl}\`` : "being created"],
+    ...(l.appUrl ? [["App", l.appUrl]] : []),
+    ["Seed data", l.seeded ? "loaded" : "not yet"],
+    ["Lane page", `[open](${pageUrl(repo, branch)}): agents, deploys, keys`],
+  ];
+  const active = v.agents.filter((a) => a.status !== "done" && a.status !== "idle");
+  if (active.length) rows.push(["On this lane", active.map((a) => `${a.name || a.vendor} (${a.vendor}): ${a.task}`).join("<br>")]);
+  if (l.error) rows.push(["Last error", "`" + l.error.split("\n")[0].slice(0, 200).replace(/`/g, "'") + "`"]);
+  return [
+    PR_MARKER,
+    `### Lane for \`${branch}\``,
+    "",
+    "| | |",
+    "| --- | --- |",
+    ...rows.map(([k, val]) => `| ${k} | ${val} |`),
+    "",
+    `<sub>Updated ${when(Date.now())} by lane-tools. Agents: \`lane join --task "..."\` on this branch uses this backend.</sub>`,
+  ].join("\n");
+}
+
+async function prStatus() {
+  const repo = repoId();
+  const branch = branchName();
+  let pr = args.pr ? Number(args.pr) : null;
+  if (!pr) {
+    const [owner] = repo.split("/");
+    const open = await gh("GET", `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + branch)}`);
+    pr = open[0]?.number ?? null;
+  }
+  if (!pr) return log(`no open PR for ${branch}; nothing to update`);
+  let v;
+  try {
+    v = await getLane(repo, branch);
+  } catch (e) {
+    return log(`no lane for ${branch} yet; nothing to update`);
+  }
+  const body = prStatusBody(repo, branch, v);
+  const comments = await gh("GET", `/repos/${repo}/issues/${pr}/comments?per_page=100`);
+  const mine = comments.find((c) => typeof c.body === "string" && c.body.startsWith(PR_MARKER));
+  if (mine) await gh("PATCH", `/repos/${repo}/issues/comments/${mine.id}`, { body });
+  else await gh("POST", `/repos/${repo}/issues/${pr}/comments`, { body });
+  log(`${mine ? "updated" : "posted"} lane status on ${repo}#${pr}`);
+}
+
 // ---------------------------------------------------------------- main
 
 const commands = {
@@ -888,6 +967,7 @@ const commands = {
   down,
   page: async () => console.log(pageUrl(repoId(), branchName())),
   pool,
+  "pr-status": prStatus,
   hook: async () => {
     if (args._[1] !== "post-receive") die("usage: lane hook post-receive");
     await postReceive();
