@@ -32,7 +32,7 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 |---|---|
 | `convex/` | The control plane, a small Convex app. Tables: `repos`, `tokens` (hashed), `lanes`, `laneAgents`, `laneEvents`, `laneKeys`. Holds the Convex team token; agents never see it. |
 | `convex/http.ts` | JSON API for the CLI, `/github/webhook` (HMAC-verified: PR opened -> ensure, push -> record HEAD, PR closed / branch deleted -> archive), and the lane page at `/` and `/lane`. |
-| `convex/provision.ts` | The Convex resource type: create a dev deployment, set env, mint scoped keys, revoke, delete. |
+| `convex/provision.ts` | The Convex resource type: create a preview deployment named `preview/<branch>`, set env, mint scoped keys, revoke, delete. |
 | `cli/lane.mjs` | Zero-dependency Node CLI. Detects vendor/thread from env (`CLAUDECODE`, `CODEX_*`, `CURSOR_*`, `AMP_*`, `AI_AGENT`), overridable with `LANE_VENDOR`, `LANE_THREAD_URL`, `LANE_MACHINE`, `LANE_PERSON`. |
 | `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, archives on PR close or branch delete. |
 | `examples/pingpal/` | "Message your friends" sample app used by the demo. |
