@@ -29,10 +29,12 @@ async function call<T>(method: string, path: string, body?: unknown, token?: str
 export type Deployment = { name: string; deploymentUrl: string; reference: string };
 
 export async function createDeployment(projectId: number, reference: string, token?: string): Promise<Deployment> {
-  // "dev" deployments have no expiry; lanes are deleted on merge instead.
+  // A preview deployment, so the dashboard and CLI show the branch. Previews expire by
+  // default; lanes clear that and are deleted on merge instead.
   return await call<Deployment>("POST", `/projects/${projectId}/create_deployment`, {
-    type: "dev",
+    type: "preview",
     reference,
+    expiresAt: null,
   }, token);
 }
 

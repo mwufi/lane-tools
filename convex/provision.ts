@@ -17,6 +17,13 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
 }
 
+/** "preview/<branch>": letters, digits, dashes and slashes, at most 100 characters. */
+export function previewReference(branch: string): string {
+  const ref = branch.toLowerCase().replace(/[^a-z0-9/-]+/g, "-").replace(/-+/g, "-")
+    .replace(/\/+/g, "/").replace(/^[-/]+|[-/]+$/g, "").slice(0, 92).replace(/[-/]+$/, "");
+  return `preview/${ref || "lane"}`;
+}
+
 /** Per-lane values that the repo's allowlist still permits. */
 export function allowedLaneEnv(
   vars: Record<string, string>,
@@ -36,7 +43,7 @@ async function repoToken(ctx: ActionCtx, repo: string): Promise<string | undefin
   return (await ctx.runQuery(internal.adminPanel.tokenForRepo, { repo })) ?? undefined;
 }
 
-/** Convex resource type, `ensure`: create a dev deployment and set the lane env. */
+/** Convex resource type, `ensure`: create a preview deployment and set the lane env. */
 export const provision = internalAction({
   args: { laneId: v.id("lanes") },
   returns: v.null(),
@@ -47,8 +54,14 @@ export const provision = internalAction({
     const { lane, repoCfg } = data;
     try {
       const token = await repoToken(ctx, lane.repo);
-      const reference = `lane-${slug(lane.branch)}-${Date.now().toString(36)}`;
-      const dep = await createDeployment(repoCfg.convexProjectId, reference, token);
+      // Name it the way Convex names a branch's preview ("preview/<branch>"). If that is
+      // taken (a native preview for the branch, or a lane still in its grace period),
+      // add a suffix rather than adopt a deployment the lane doesn't own.
+      const reference = previewReference(lane.branch);
+      const dep = await createDeployment(repoCfg.convexProjectId, reference, token).catch((e) => {
+        if (!/-> 4\d\d/.test(String(e))) throw e;
+        return createDeployment(repoCfg.convexProjectId, `${reference.slice(0, 90)}-${Date.now().toString(36)}`, token);
+      });
       const env = {
         ...repoCfg.env,
         ...allowedLaneEnv(lane.env ?? {}, repoCfg.laneEnvAllow ?? {}),
