@@ -1012,17 +1012,27 @@ async function pool() {
   if (!todo.length) return log(`pool: ${p.spares.length} spare(s), all warm at ${short(sha)}`);
   snapshotFill = { done: false };
   let failed = 0;
+  // One spare's failure (even a thrown API error) is counted, not fatal: the others finish
+  // their deploys and release their locks.
   const fill = async (s, opts) => {
     log(`pool: ${s.branch} (${s.deploymentName})`);
-    await api("POST", "/api/lane/push", { repo, branch: s.branch, sha, convexChanged: true, actor: "lane pool fill" });
-    if ((await deploy(repo, s.branch, opts)) === false) failed++;
+    try {
+      await api("POST", "/api/lane/push", { repo, branch: s.branch, sha, convexChanged: true, actor: "lane pool fill" });
+      if ((await deploy(repo, s.branch, opts)) === false) failed++;
+    } catch (e) {
+      failed++;
+      log(`pool: ${s.branch} failed: ${String(e.message || e).split("\n")[0]}`);
+    }
   };
   // An unseeded spare may have to seed from scratch and export the snapshot the others then
   // import, so fill one of those first; then the rest at once, each from its own worktree.
   const first = todo.find((s) => !s.seeded);
   const t0 = Date.now();
   if (first) await fill(first);
-  await Promise.all(todo.filter((s) => s !== first).map((s) => fill(s, { worktree: true })));
+  // At most four at a time: each runs `convex deploy` (and maybe a typecheck) on the same runner.
+  const rest = todo.filter((s) => s !== first);
+  const worker = async () => { for (let s; (s = rest.shift()); ) await fill(s, { worktree: true }); };
+  await Promise.allSettled(Array.from({ length: Math.min(4, rest.length) }, worker));
   log(`pool: filled ${todo.length - failed}/${todo.length} spare(s) in ${secs(Date.now() - t0)}`);
   if (failed) die(`${failed} spare(s) failed to deploy`);
 }
@@ -1088,12 +1098,20 @@ async function prStatus() {
   const repo = repoId();
   const branch = branchName();
   let pr = args.pr ? Number(args.pr) : null;
-  if (!pr) {
+  let info = null;
+  if (pr) info = await gh("GET", `/repos/${repo}/pulls/${pr}`).catch(() => null);
+  else {
     const [owner] = repo.split("/");
     const open = await gh("GET", `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + branch)}`);
-    pr = open[0]?.number ?? null;
+    info = open[0] ?? null;
+    pr = info?.number ?? null;
   }
   if (!pr) return log(`no open PR for ${branch}; nothing to update`);
+  // The lane page links the PR; a failure here shouldn't stop the comment.
+  if (info) {
+    const state = info.merged_at ? "merged" : info.state === "closed" ? "closed" : info.draft ? "draft" : "open";
+    await api("POST", "/api/lane/pr", { repo, branch, number: pr, state, title: info.title }).catch((e) => log(`couldn't record the PR on the lane: ${e.message}`));
+  }
   let v;
   try {
     v = await getLane(repo, branch);

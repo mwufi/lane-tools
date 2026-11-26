@@ -166,6 +166,20 @@ export const markFailed = internalMutation({
 });
 
 /** PR merged/closed, branch deleted, or `lane down`. Keys revoked now, deployment after grace. */
+/** Remember the branch's pull request, for links on the lane page. */
+export const setPr = internalMutation({
+  args: { repo: v.string(), branch: v.string(), number: v.number(), state: v.string(), title: v.optional(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const lane = await laneFor(ctx, args.repo, args.branch);
+    if (!lane) return null;
+    const pr = { number: args.number, state: args.state, ...(args.title ? { title: args.title.slice(0, 200) } : {}) };
+    const same = lane.pr && lane.pr.number === pr.number && lane.pr.state === pr.state && lane.pr.title === pr.title;
+    if (!same) await ctx.db.patch("lanes", lane._id, { pr });
+    return null;
+  },
+});
+
 export const archive = internalMutation({
   args: { repo: v.string(), branch: v.string(), actor: v.string(), reason: v.string() },
   returns: v.union(v.null(), v.object({ graceMs: v.number() })),
@@ -177,7 +191,12 @@ export const archive = internalMutation({
       .withIndex("by_repo", (q) => q.eq("repo", args.repo))
       .unique();
     const graceMs = repoCfg?.graceMs ?? 0;
-    await ctx.db.patch("lanes", lane._id, { state: "archived", lock: undefined });
+    const prState = args.reason.startsWith("PR merged") ? "merged" : args.reason.startsWith("PR closed") ? "closed" : null;
+    await ctx.db.patch("lanes", lane._id, {
+      state: "archived",
+      lock: undefined,
+      ...(lane.pr && prState ? { pr: { ...lane.pr, state: prState } } : {}),
+    });
     for await (const agent of ctx.db
       .query("laneAgents")
       .withIndex("by_laneId", (q) => q.eq("laneId", lane._id))) {
@@ -510,6 +529,10 @@ function laneSummary(lane: Doc<"lanes">) {
     // The app's preview URL when the lane's allow-listed env names one (e.g. a Vercel branch URL).
     appUrl: lane.env?.SITE_URL ?? lane.env?.APP_URL ?? null,
     dashboardUrl: lane.deploymentName ? `https://dashboard.convex.dev/d/${lane.deploymentName}` : null,
+    githubUrl: lane.pool ? null : `https://github.com/${lane.repo}/tree/${lane.branch}`,
+    pr: lane.pr ? { ...lane.pr, title: lane.pr.title ?? null, url: `https://github.com/${lane.repo}/pull/${lane.pr.number}` } : null,
+    // Where to open one: GitHub's compare page for this branch.
+    newPrUrl: lane.pool ? null : `https://github.com/${lane.repo}/compare/${encodeURIComponent(lane.branch)}?expand=1`,
     headSha: lane.headSha ?? null,
     deployedSha: lane.deployedSha ?? null,
     deploying: lane.lock ? { holder: lane.lock.holder, sha: lane.lock.sha } : null,

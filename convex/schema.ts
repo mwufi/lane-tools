@@ -94,6 +94,8 @@ export default defineSchema({
     // A warm-pool spare: `branch` is "pool:<id>" (a colon can't appear in a git branch) until
     // a real branch claims it, which clears this flag.
     pool: v.optional(v.boolean()),
+    // The branch's pull request, as last reported by the PR status step or a GitHub webhook.
+    pr: v.optional(v.object({ number: v.number(), state: v.string(), title: v.optional(v.string()) })),
     // Serialized deployer: a lease, so a crashed deployer can't hold it forever.
     lock: v.optional(
       v.object({ holder: v.string(), sha: v.string(), expiresAt: v.number() }),

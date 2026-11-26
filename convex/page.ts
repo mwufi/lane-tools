@@ -34,6 +34,14 @@ export const PAGE_HTML = /* html */ `<!doctype html>
   .s-ready .dot, .s-working .dot { background: var(--ok); }
   .s-provisioning .dot, .s-waiting .dot, .s-deploying .dot, .s-idle .dot { background: var(--warn); }
   .s-failed .dot { background: var(--bad); }
+  .s-open .dot { background: var(--ok); } .s-merged .dot { background: #8e6bd8; } .s-closed .dot { background: var(--bad); } .s-draft .dot { background: var(--faint); }
+  .links { display:flex; flex-wrap:wrap; gap:8px; margin: 12px 0 0; }
+  .link { display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border:1px solid var(--line); border-radius:9px; background: var(--card); color: var(--fg); font-size:13px; text-decoration:none; max-width:100%; min-width:0; }
+  .link:hover { background: var(--hover); }
+  .link b { color: var(--muted); font-weight:500; }
+  .link .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .link.none { color: var(--faint); border-style: dashed; }
+  .minilinks a { margin-right: 10px; white-space: nowrap; }
   .row { display:flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .err { color: var(--bad); white-space: pre-wrap; }
   .grow { flex: 1; }
@@ -146,13 +154,13 @@ function laneLink(l) { return "/lane?repo=" + encodeURIComponent(l.repo) + "&bra
 function renderIndex(lanes) {
   const open = lanes.filter((l) => l.state !== "deleted");
   let h = '<h1>Lanes</h1><p class="sub">' + open.length + ' open · one shared backend per branch, for every agent on it</p>';
-  h += '<div class="card tablewrap" style="margin-top:18px"><table><tr><th>Branch</th><th>Repo</th><th>State</th><th>Agents</th><th>Deployed</th><th>Activity</th></tr>';
+  h += '<div class="card tablewrap" style="margin-top:18px"><table><tr><th>Branch</th><th>Repo</th><th>State</th><th>Links</th><th>Agents</th><th>Deployed</th><th>Activity</th></tr>';
   for (const l of lanes) {
     h += '<tr><td><a href="' + laneLink(l) + '"><b>' + esc(l.branch) + '</b></a></td><td class="sub">' + esc(l.repo) + '</td><td>' + pill(l.state) +
-      '</td><td>' + l.activeAgents + ' active <span class="sub">/ ' + l.totalAgents + '</span></td><td class="mono">' + short(l.deployedSha) +
+      '</td><td>' + miniLinks(l) + '</td><td>' + l.activeAgents + ' active <span class="sub">/ ' + l.totalAgents + '</span></td><td class="mono">' + short(l.deployedSha) +
       '</td><td class="sub">' + ago(l.lastActivity) + '</td></tr>';
   }
-  if (!lanes.length) h += '<tr><td colspan="6" class="sub">No lanes yet. Run <code>lane up</code> on a branch.</td></tr>';
+  if (!lanes.length) h += '<tr><td colspan="7" class="sub">No lanes yet. Run <code>lane up</code> on a branch.</td></tr>';
   $("#app").innerHTML = h + '</table></div>';
 }
 
@@ -394,6 +402,23 @@ function renderTimeline(items) {
   return h + '</div>';
 }
 
+// The lane's resources, linked: branch, PR, web preview, Convex backend.
+function laneLinks(l) {
+  const a = (href, label, text, extra) => '<a class="link" href="' + esc(href) + '" target="_blank" rel="noopener"><b>' + label + '</b><span class="t">' + text + '</span>' + (extra || '') + '</a>';
+  const none = (label, text, href) => href ? '<a class="link none" href="' + esc(href) + '" target="_blank" rel="noopener"><b>' + label + '</b>' + text + '</a>' : '<span class="link none"><b>' + label + '</b>' + text + '</span>';
+  let h = '<div class="links">';
+  if (l.githubUrl) h += a(l.githubUrl, "Branch", esc(l.branch));
+  if (l.pr) h += a(l.pr.url, "PR", "#" + l.pr.number + (l.pr.title ? " " + esc(l.pr.title) : ""), " " + pill(l.pr.state));
+  else if (l.newPrUrl) h += none("PR", "none yet · open one", l.newPrUrl);
+  h += l.appUrl ? a(l.appUrl, "Preview", esc(l.appUrl.replace(/^https?:\\/\\//, ""))) : none("Preview", "none yet");
+  h += l.dashboardUrl ? a(l.dashboardUrl, "Convex", esc(l.deploymentName), ' <span class="sub mono">' + esc((l.deploymentUrl || "").replace(/^https?:\\/\\//, "")) + '</span>') : none("Convex", "not created yet");
+  return h + '</div>';
+}
+function miniLinks(l) {
+  const a = (href, text) => '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + text + '</a>';
+  return '<span class="minilinks">' + (l.pr ? a(l.pr.url, "PR #" + l.pr.number) : '') + (l.appUrl ? a(l.appUrl, "Preview") : '') + (l.dashboardUrl ? a(l.dashboardUrl, "Convex") : '') + (l.githubUrl ? a(l.githubUrl, "GitHub") : '') + '</span>';
+}
+
 function renderLane(v) {
   const l = v.lane, now = Date.now();
   const items = build(v.events);
@@ -405,6 +430,7 @@ function renderLane(v) {
     ? '<button class="ghost" data-lane-act="restore" title="' + (l.state === "archived" ? "Same backend, kept during the grace period" : "Its backend was deleted; this makes a new one") + '">Restore</button>'
     : (l.state === "ready" || l.state === "failed") ? '<button class="ghost" data-lane-act="archive">Archive</button>' : "";
   h += '<div class="row"><h1>' + esc(l.branch) + '</h1>' + pill(l.state) + deployState + '<span class="grow"></span>' + action + '</div>';
+  h += laneLinks(l);
   // A failed deploy's log lives on its timeline row; up here, one line, and only while the
   // newest deploy is the failed one. A lane that failed to provision shows its first line.
   const deploys = items.filter((i) => i.kind === "deploy");
