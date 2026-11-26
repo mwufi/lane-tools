@@ -1033,12 +1033,20 @@ async function prStatus() {
   const repo = repoId();
   const branch = branchName();
   let pr = args.pr ? Number(args.pr) : null;
-  if (!pr) {
+  let info = null;
+  if (pr) info = await gh("GET", `/repos/${repo}/pulls/${pr}`).catch(() => null);
+  else {
     const [owner] = repo.split("/");
     const open = await gh("GET", `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + branch)}`);
-    pr = open[0]?.number ?? null;
+    info = open[0] ?? null;
+    pr = info?.number ?? null;
   }
   if (!pr) return log(`no open PR for ${branch}; nothing to update`);
+  // The lane page links the PR; a failure here shouldn't stop the comment.
+  if (info) {
+    const state = info.merged_at ? "merged" : info.state === "closed" ? "closed" : info.draft ? "draft" : "open";
+    await api("POST", "/api/lane/pr", { repo, branch, number: pr, state, title: info.title }).catch((e) => log(`couldn't record the PR on the lane: ${e.message}`));
+  }
   let v;
   try {
     v = await getLane(repo, branch);

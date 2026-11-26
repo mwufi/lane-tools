@@ -195,6 +195,8 @@
     .progress { flex-wrap: wrap; gap: 6px 12px; } .progress .track { flex-basis: 100%; max-width: none; }
     .topbar { display:none; }
   }
+  .lanelinks { font-size: 12px; margin-top: 2px; color: var(--faint); }
+  .lanelinks a { color: var(--muted); }
 </style>
 </head>
 <body><div id="app"><main><p class="sub">Loading…</p></main></div>
@@ -578,6 +580,17 @@ function startTab(d) {
 }
 
 // ---------------------------------------------------------------- Lanes
+// A lane's resources: its PR, web preview, Convex dashboard and GitHub branch.
+function laneLinks(l) {
+  const a = (href, text, title) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" title="' + esc(title) + '">' + text + '</a>';
+  const out = [];
+  if (l.pr) out.push(a(l.pr.url, "PR #" + l.pr.number + (l.pr.state !== "open" ? " · " + esc(l.pr.state) : ""), l.pr.title || "Pull request"));
+  if (l.appUrl) out.push(a(l.appUrl, "Preview", l.appUrl));
+  if (l.dashboardUrl && l.state !== "archived") out.push(a(l.dashboardUrl, "Convex", l.deploymentName || "Convex dashboard"));
+  if (l.githubUrl) out.push(a(l.githubUrl, "GitHub", "Branch on GitHub"));
+  return out.join(" · ");
+}
+
 function lanesTab(d) {
   const all = d.lanes.filter((l) => !l.pool && l.state !== "deleted");
   const q = FILTER.q.toLowerCase();
@@ -596,7 +609,7 @@ function lanesTab(d) {
       const btn = l.state === "failed" ? '<button class="small" data-retry="' + esc(l.repo) + '|' + esc(l.branch) + '">Retry</button>' :
         (l.state === "archived" || l.state === "deleted") ? '<button class="small" data-restore="' + esc(l.repo) + '|' + esc(l.branch) + '|' + l.state + '">Restore</button>' : '<button class="small danger" data-archive="' + esc(l.repo) + '|' + esc(l.branch) + '">Archive</button>';
       return '<tr class="' + (l.state === "archived" ? "off" : "") + '"><td><a href="' + page + '">' + esc(l.branch) + '</a>' +
-        (l.dashboardUrl && l.state !== "archived" ? ' <a class="faint" href="' + esc(l.dashboardUrl) + '" target="_blank" rel="noopener" title="Convex dashboard">↗</a>' : '') + '</td>' +
+        '<div class="lanelinks">' + laneLinks(l) + '</div></td>' +
         '<td>' + state + '</td><td class="hide-sm sub">' + esc(l.repo) + '</td><td>' + (l.activeAgents ? '<b>' + l.activeAgents + '</b>' : '<span class="faint">0</span>') + '</td>' +
         '<td class="hide-sm mono sub">' + esc((l.deployedSha || "").slice(0, 7) || "–") + '</td><td class="hide-sm sub">' + ago(l.lastActivity) + '</td><td style="text-align:right">' + btn + '</td></tr>' +
         (l.state === "failed" && l.error ? '<tr><td colspan="7" class="err">' + esc(l.error.slice(0, 400)) + '</td></tr>' : '');
