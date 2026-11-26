@@ -1,0 +1,39 @@
+# .github/workflows/lane-pool.yml: keeps the warm pool's spare lanes deployed from main and seeded,
+# so a new branch's lane starts warm (seconds to claim, then only the branch's own deploy).
+# The control plane creates the spares (admin panel: repo settings, "Warm pool"); this deploys
+# to them. Needs the Actions secret LANE_DEPLOYER_TOKEN and the variable LANE_URL.
+name: lane-pool
+on:
+  push:
+    branches: [main]
+    paths: ["convex/**", "package-lock.json"]
+  schedule:
+    - cron: "17 * * * *" # pick up spares the control plane created since the last push
+  workflow_dispatch:
+concurrency: { group: lane-pool, cancel-in-progress: false }
+env:
+  LANE_URL: ${{ vars.LANE_URL }}
+  LANE_TOKEN: ${{ secrets.LANE_DEPLOYER_TOKEN }}
+  LANE_DEPLOYER: github-actions
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      # Skip checkout and npm ci when every spare already runs main's HEAD.
+      - id: need
+        run: |
+          sha=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main 2>/dev/null | cut -f1)
+          [ -n "$sha" ] || sha="$GITHUB_SHA"
+          n=$(npx -y github:mwufi/lane-tools pool --json --repo "$GITHUB_REPOSITORY" |
+            node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s);console.log(p.spares.filter(x=>x.state==="ready"&&!(x.seeded&&x.deployedSha===process.argv[1])).length)})' "$sha")
+          echo "spares needing $sha: $n"
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+      - if: steps.need.outputs.n != '0'
+        uses: actions/checkout@v4
+        with: { ref: main }
+      - if: steps.need.outputs.n != '0'
+        run: npm ci
+      - if: steps.need.outputs.n != '0'
+        run: npx -y github:mwufi/lane-tools pool fill
