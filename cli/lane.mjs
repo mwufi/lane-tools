@@ -24,6 +24,8 @@ Usage: lane <command> [options]
   list                    All lanes
   wait [--sha <sha>]      Block until <sha> (default: origin HEAD) is live on the lane
   deploy                  Deploy the branch's pushed HEAD under the lane lock (what CI/hooks run)
+  reset --table <t>[,<t>] Empty those tables on this lane (e.g. old rows blocking a schema change)
+  reset --snapshot        Replace all of this lane's data with the repo's newest seed snapshot
   key [--print]           Mint a 4h deploy key for this lane (saved to .lane/deploy-key)
   heartbeat [--status working|waiting|done] [--task "..."]
   leave                   Mark this agent done
@@ -31,6 +33,7 @@ Usage: lane <command> [options]
   down                    Archive the lane: revoke keys now, delete the deployment after grace
   page                    Print the lane page URL
   pool [fill [--sha <sha>]]  Show the repo's warm spares; fill deploys <sha> (default HEAD) to them
+  pr-status [--pr N]      Post or update the lane status comment on the branch's PR (needs GITHUB_TOKEN)
   hook post-receive       Git post-receive hook: report pushes and run the deployer
 
 Common options: --repo owner/name  --branch name  --json
@@ -699,7 +702,24 @@ function cleanCheckoutAt(sha) {
   return dirty === "";
 }
 
-// A clean worktree at exactly `sha`, with node_modules shared by lockfile hash.
+// The checkout's node_modules fits a deploy of `sha` when it was installed from the same package
+// files, and (for npm workspaces, whose packages it links to) the workspace folders match `sha` too.
+function reusableNodeModules(wt, sha, pkg) {
+  if (!repoRoot || !fs.existsSync(path.join(repoRoot, "node_modules"))) return false;
+  for (const f of ["package.json", "package-lock.json"]) {
+    const a = path.join(wt, f);
+    const b = path.join(repoRoot, f);
+    if (fs.existsSync(a) !== fs.existsSync(b)) return false;
+    if (fs.existsSync(a) && !fs.readFileSync(a).equals(fs.readFileSync(b))) return false;
+  }
+  const ws = Array.isArray(pkg.workspaces) ? pkg.workspaces : pkg.workspaces?.packages || [];
+  if (!ws.length) return true;
+  const diff = git(["diff", "--name-only", sha, "--", ...ws]);
+  return diff === "";
+}
+
+// A clean worktree at exactly `sha`. node_modules comes from this checkout when it matches, else
+// a cache shared by lockfile hash, else (install scripts or workspaces) a fresh install there.
 function checkout(sha, branch) {
   if (!git(["cat-file", "-e", sha + "^{commit}"])) git(["fetch", "--quiet", "origin", branch]);
   const cache = path.join(os.homedir(), ".cache/lane");
@@ -707,26 +727,85 @@ function checkout(sha, branch) {
   fs.mkdirSync(path.dirname(wt), { recursive: true });
   execFileSync("git", ["worktree", "add", "--detach", "--force", wt, sha], { cwd: gitDir, stdio: "ignore" });
   const lock = ["package-lock.json", "package.json"].map((f) => path.join(wt, f)).find((f) => fs.existsSync(f));
-  if (lock) {
-    const hash = createHash("sha256").update(fs.readFileSync(lock)).digest("hex").slice(0, 16);
-    const nm = path.join(cache, "node_modules", hash);
-    if (!fs.existsSync(path.join(nm, "node_modules"))) {
-      const tmp = nm + ".tmp-" + process.pid;
-      fs.mkdirSync(tmp, { recursive: true });
-      for (const f of ["package.json", "package-lock.json"]) {
-        if (fs.existsSync(path.join(wt, f))) fs.copyFileSync(path.join(wt, f), path.join(tmp, f));
-      }
-      const hasLock = fs.existsSync(path.join(tmp, "package-lock.json"));
-      run("npm", [hasLock ? "ci" : "install", "--no-audit", "--no-fund", "--silent"], tmp, process.env);
-      try {
-        fs.renameSync(tmp, nm);
-      } catch {
-        fs.rmSync(tmp, { recursive: true, force: true }); // another deployer won the race
-      }
-    }
-    fs.symlinkSync(path.join(nm, "node_modules"), path.join(wt, "node_modules"));
+  if (!lock) return wt;
+  let pkg = {};
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(wt, "package.json"), "utf8"));
+  } catch {}
+  if (reusableNodeModules(wt, sha, pkg)) {
+    // This checkout installed exactly these dependencies, with its own install scripts: reuse them.
+    fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(wt, "node_modules"));
+    return wt;
   }
+  const scripts = pkg.scripts || {};
+  if (pkg.workspaces || ["preinstall", "install", "postinstall", "prepare"].some((s) => scripts[s])) {
+    // Install scripts read the repo's files, and workspaces link into it: install in the worktree.
+    run("npm", [fs.existsSync(path.join(wt, "package-lock.json")) ? "ci" : "install", "--no-audit", "--no-fund", "--silent"], wt, process.env);
+    return wt;
+  }
+  const hash = createHash("sha256").update(fs.readFileSync(lock)).digest("hex").slice(0, 16);
+  const nm = path.join(cache, "node_modules", hash);
+  if (!fs.existsSync(path.join(nm, "node_modules"))) {
+    const tmp = nm + ".tmp-" + process.pid;
+    fs.mkdirSync(tmp, { recursive: true });
+    for (const f of ["package.json", "package-lock.json"]) {
+      if (fs.existsSync(path.join(wt, f))) fs.copyFileSync(path.join(wt, f), path.join(tmp, f));
+    }
+    const hasLock = fs.existsSync(path.join(tmp, "package-lock.json"));
+    run("npm", [hasLock ? "ci" : "install", "--no-audit", "--no-fund", "--silent"], tmp, process.env);
+    try {
+      fs.renameSync(tmp, nm);
+    } catch {
+      fs.rmSync(tmp, { recursive: true, force: true }); // another deployer won the race
+    }
+  }
+  fs.symlinkSync(path.join(nm, "node_modules"), path.join(wt, "node_modules"));
   return wt;
+}
+
+// `lane deploy`: catch the lane up to a plain `git push` it hasn't heard about, then deploy.
+async function deployCmd() {
+  const repo = repoId();
+  const branch = branchName();
+  const head = remoteHead(branch);
+  const v = await getLane(repo, branch);
+  if (head && v.lane.headSha && head !== v.lane.headSha && !isAncestor(head, v.lane.headSha)) {
+    log(`  the lane last saw ${short(v.lane.headSha)}; recording ${short(head)}, pushed since`);
+    await reportPush(repo, branch, v.lane.headSha, head);
+  }
+  if ((await deploy(repo, branch)) === false) process.exitCode = 1;
+}
+
+// Wipe lane data the lane's own keys can't: they run functions but can't import or replace.
+async function reset() {
+  const repo = repoId();
+  const branch = branchName();
+  const tables = typeof args.table === "string" ? args.table.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  if (!tables.length && !args.snapshot) die("usage: lane reset --table <name>[,<name>]  or  lane reset --snapshot");
+  if (tables.some((t) => !/^[A-Za-z][\w]*$/.test(t))) die(`not a table name: ${tables.join(", ")}`);
+  const holder = readState("agent.json")?.name || detectAgent().vendor;
+  const detail = tables.length ? `emptied ${tables.join(", ")}` : "restored the seed snapshot";
+  const v = await getLane(repo, branch);
+  const res = await api("POST", "/api/lane/reset-key", { repo, branch, holder, detail });
+  const env = { ...process.env, CONVEX_DEPLOY_KEY: res.key };
+  delete env.CONVEX_DEPLOYMENT;
+  const dir = repoRoot || process.cwd();
+  if (tables.length) {
+    const empty = path.join(os.tmpdir(), `lane-empty-${process.pid}.jsonl`);
+    fs.writeFileSync(empty, "");
+    try {
+      for (const t of tables) {
+        run("npx", ["convex", "import", "--table", t, "--replace", "-y", empty], dir, env);
+        log(`  emptied ${t} on ${v.lane.deploymentName}`);
+      }
+    } finally {
+      fs.rmSync(empty, { force: true });
+    }
+    return;
+  }
+  if (!res.snapshot) die("this repo has no seed snapshot yet; empty specific tables with --table instead");
+  await importSnapshot(res.snapshot, res.key, dir);
+  log(`  ${v.lane.deploymentName} now holds seed snapshot ${short(res.snapshot.sha)}`);
 }
 
 async function key() {
@@ -862,6 +941,84 @@ async function pool() {
   if (failed) die(`${failed} spare(s) failed to deploy`);
 }
 
+// ---------------------------------------------------------------- PR status comment
+
+// One comment per PR, edited in place, saying where the branch's lane is and whether it's live.
+// Runs in CI after `lane up` with GITHUB_TOKEN (pull-requests: write); `--pr N` picks the PR,
+// otherwise the open PR whose head is this branch.
+const PR_MARKER = "<!-- lane-status -->";
+
+async function gh(method, p, body) {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (!token) die("GITHUB_TOKEN is not set");
+  const res = await fetch(`${process.env.GITHUB_API_URL || "https://api.github.com"}${p}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "lane-tools" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`GitHub ${method} ${p} -> ${res.status}: ${text.slice(0, 200)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+function prStatusBody(repo, branch, v) {
+  const l = v.lane;
+  const when = (t) => (t ? new Date(t).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "");
+  const state =
+    l.state === "ready"
+      ? l.deploying
+        ? `deploying \`${short(l.deploying.sha)}\``
+        : l.headSha && l.deployedSha !== l.headSha
+          ? `behind: running \`${short(l.deployedSha)}\`, branch is at \`${short(l.headSha)}\``
+          : `live at \`${short(l.deployedSha)}\``
+      : l.state;
+  const ok = l.state === "ready" && !l.deploying && (!l.headSha || l.deployedSha === l.headSha) && !l.error;
+  const rows = [
+    ["Status", `${ok ? "🟢" : l.state === "failed" || l.error ? "🔴" : "🟡"} ${state}`],
+    ["Backend", l.deploymentUrl ? `[${l.deploymentName}](${l.dashboardUrl}) · \`${l.deploymentUrl}\`` : "being created"],
+    ...(l.appUrl ? [["App", l.appUrl]] : []),
+    ["Seed data", l.seeded ? "loaded" : "not yet"],
+    ["Lane page", `[open](${pageUrl(repo, branch)}): agents, deploys, keys`],
+  ];
+  const active = v.agents.filter((a) => a.status !== "done" && a.status !== "idle");
+  if (active.length) rows.push(["On this lane", active.map((a) => `${a.name || a.vendor} (${a.vendor}): ${a.task}`).join("<br>")]);
+  if (l.error) rows.push(["Last error", "`" + l.error.split("\n")[0].slice(0, 200).replace(/`/g, "'") + "`"]);
+  return [
+    PR_MARKER,
+    `### Lane for \`${branch}\``,
+    "",
+    "| | |",
+    "| --- | --- |",
+    ...rows.map(([k, val]) => `| ${k} | ${val} |`),
+    "",
+    `<sub>Updated ${when(Date.now())} by lane-tools. Agents: \`lane join --task "..."\` on this branch uses this backend.</sub>`,
+  ].join("\n");
+}
+
+async function prStatus() {
+  const repo = repoId();
+  const branch = branchName();
+  let pr = args.pr ? Number(args.pr) : null;
+  if (!pr) {
+    const [owner] = repo.split("/");
+    const open = await gh("GET", `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(owner + ":" + branch)}`);
+    pr = open[0]?.number ?? null;
+  }
+  if (!pr) return log(`no open PR for ${branch}; nothing to update`);
+  let v;
+  try {
+    v = await getLane(repo, branch);
+  } catch (e) {
+    return log(`no lane for ${branch} yet; nothing to update`);
+  }
+  const body = prStatusBody(repo, branch, v);
+  const comments = await gh("GET", `/repos/${repo}/issues/${pr}/comments?per_page=100`);
+  const mine = comments.find((c) => typeof c.body === "string" && c.body.startsWith(PR_MARKER));
+  if (mine) await gh("PATCH", `/repos/${repo}/issues/comments/${mine.id}`, { body });
+  else await gh("POST", `/repos/${repo}/issues/${pr}/comments`, { body });
+  log(`${mine ? "updated" : "posted"} lane status on ${repo}#${pr}`);
+}
+
 // ---------------------------------------------------------------- main
 
 const commands = {
@@ -879,7 +1036,8 @@ const commands = {
     const sha = typeof args.sha === "string" ? git(["rev-parse", args.sha]) || args.sha : remoteHead(branch);
     await waitFor(repo, branch, sha, Number(args.timeout || 600) * 1000);
   },
-  deploy: () => deploy(repoId(), branchName()),
+  deploy: deployCmd,
+  reset,
   key,
   run: runFn,
   heartbeat: () => heartbeat(),
@@ -888,6 +1046,7 @@ const commands = {
   down,
   page: async () => console.log(pageUrl(repoId(), branchName())),
   pool,
+  "pr-status": prStatus,
   hook: async () => {
     if (args._[1] !== "post-receive") die("usage: lane hook post-receive");
     await postReceive();

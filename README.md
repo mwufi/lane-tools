@@ -15,6 +15,8 @@ git push                                 # the lane follows the branch: convex/ 
 lane wait --sha HEAD                     # block until your commit is live
 lane key                                 # 4h deploy key scoped to this lane (.lane/deploy-key)
 lane run seed:run '{"n":5}'               # run a Convex function on this branch's lane
+lane reset --table votes                 # empty tables the lane's keys can't (e.g. rows blocking a schema change)
+lane reset --snapshot                    # replace the lane's data with the repo's newest seed snapshot
 lane leave / lane down                   # done / archive the lane (deployment deleted after grace)
 ```
 
@@ -34,7 +36,7 @@ plane URL and token from `~/.config/lane/`, and `lane` keeps `.lane/` and `.env.
 | `convex/http.ts` | JSON API for the CLI, `/github/webhook` (HMAC-verified: PR opened -> ensure, push -> record HEAD, PR closed / branch deleted -> archive), and the lane page at `/` and `/lane`. |
 | `convex/provision.ts` | The Convex resource type: create a preview deployment named `preview/<branch>`, set env, mint scoped keys, revoke, delete. |
 | `cli/lane.mjs` | Zero-dependency Node CLI. Detects vendor/thread from env (`CLAUDECODE`, `CODEX_*`, `CURSOR_*`, `AMP_*`, `AI_AGENT`), overridable with `LANE_VENDOR`, `LANE_THREAD_URL`, `LANE_MACHINE`, `LANE_PERSON`. |
-| `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, archives on PR close or branch delete. |
+| `templates/lanes.yml` | GitHub Action that runs a repo's lanes without a GitHub app: creates and deploys on push, keeps a lane status comment on the PR, archives on PR close or branch delete. |
 | `templates/lane-pool.yml` | GitHub Action that keeps the warm pool deployed from `main` and seeded. |
 | `convex/pool.ts` | Warm pool: spare lanes per repo that a new lane claims instead of starting cold. |
 | `convex/seed.ts` | Seed snapshots: a new lane imports the repo's newest snapshot instead of running every setup function. |
