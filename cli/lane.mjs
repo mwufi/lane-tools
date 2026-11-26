@@ -983,7 +983,8 @@ function prStatusBody(repo, branch, v) {
   ];
   const active = v.agents.filter((a) => a.status !== "done" && a.status !== "idle");
   // Agents' tasks and errors are free text: keep them from breaking the table or rendering markdown.
-  const cell = (t) => String(t ?? "").replace(/[\r\n]+/g, " ").replace(/[\\`*_[\]<>|!]/g, (c) => "\\" + c);
+  const cell = (t) => String(t ?? "").replace(/[\r\n]+/g, " ").replace(/[\\`*_[\]<>|!]/g, (c) => "\\" + c)
+    .replace(/@/g, "@\u200b"); // no mentions from agents' text
   if (active.length) rows.push(["On this lane", active.map((a) => `${cell(a.name || a.vendor)} (${cell(a.vendor)}): ${cell(a.task)}`).join("<br>")]);
   if (l.error) rows.push(["Last error", cell(l.error.split("\n")[0].slice(0, 200))]);
   return [
